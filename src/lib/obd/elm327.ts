@@ -24,7 +24,7 @@ export function cleanLines(raw: string): string[] {
     .filter((line) => line.length > 0 && !line.startsWith('SEARCHING'));
 }
 
-function hexToBytes(hex: string): number[] {
+export function hexToBytes(hex: string): number[] {
   const bytes: number[] = [];
   for (let i = 0; i + 1 < hex.length; i += 2) {
     const value = parseInt(hex.slice(i, i + 2), 16);
@@ -38,7 +38,7 @@ function hexToBytes(hex: string): number[] {
  * Több képkockás (ISO-TP) CAN válasz összefűzése. Fejlécek nélkül az ELM327 így írja:
  * `014` / `0:4306010301040` / `1:...`. Az első sor a hossz, a többi sorszámozott.
  */
-function joinFrames(lines: string[]): string[] {
+export function joinFrames(lines: string[]): string[] {
   if (!lines.some((line) => /^[0-9A-F]:/.test(line))) {
     return lines;
   }
@@ -117,7 +117,7 @@ export class Elm327 {
   private async loadSupportedPids(first: string[]) {
     this.supportedPids.clear();
     let response = first;
-    for (const base of [0x00, 0x20, 0x40]) {
+    for (const base of [0x00, 0x20, 0x40, 0x60, 0x80]) {
       if (base > 0) {
         try {
           response = await this.send(`01${base.toString(16).toUpperCase().padStart(2, '0')}`);
@@ -156,7 +156,8 @@ export class Elm327 {
     if (lines.some((line) => NO_DATA_RESPONSES.includes(line))) return null;
     const bytes = this.findMode01Payload(lines, definition.pid);
     if (!bytes || bytes.length === 0) return null;
-    return definition.decode(bytes);
+    const value = definition.decode(bytes);
+    return value == null || Number.isNaN(value) ? null : value;
   }
 
   /** Az adapter által mért akkumulátor feszültség (a 16-os tűn). */
