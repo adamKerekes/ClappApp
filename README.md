@@ -86,6 +86,52 @@ npx expo lint             # lint
 npx expo-doctor           # függőségek és konfiguráció ellenőrzése
 ```
 
+## OBD-II adapter (Bluetooth)
+
+Az **OBD** fül egy olcsó ELM327 Bluetooth adapterről olvas élő adatokat (fordulatszám, sebesség, hűtővíz, terhelés, akkufeszültség stb.) és hibakódokat. Csak **Androidon** működik, klasszikus Bluetooth (SPP) adapterrel, és **development build** kell hozzá: az Expo Go-ban nincs benne a Bluetooth modul.
+
+A natív rész a [`modules/obd-bluetooth`](modules/obd-bluetooth) helyi Expo modulban van, az ELM327 protokoll a [`src/lib/obd`](src/lib/obd) mappában.
+
+### Development build telepítése Windowson (cmd)
+
+Egyszer kell megcsinálni, és csak akkor újra, ha natív kód vagy natív csomag változik. A JavaScript módosítások a dev szerverről jönnek.
+
+1. Telepítsd a [Node.js LTS](https://nodejs.org) verzióját, ha még nincs meg.
+2. Nyiss egy **Parancssort** (Start menü → `cmd`), és lépj be a projekt mappájába:
+   ```
+   cd C:\ide\a\projekt\mappaja\clappapp
+   git pull
+   npm install
+   ```
+3. Jelentkezz be az Expo fiókodba (ha nincs, regisztrálj az [expo.dev](https://expo.dev) oldalon):
+   ```
+   npx eas-cli@latest login
+   ```
+4. Csak az első alkalommal kösd össze a projektet az Expo fiókoddal (minden kérdésre `Y`):
+   ```
+   npx eas-cli@latest init
+   ```
+5. Indítsd el a buildet a felhőben:
+   ```
+   npx eas-cli@latest build --profile development --platform android
+   ```
+   Ha azt kérdezi, hogy generáljon-e Android Keystore-t, válaszd az `Y`-t. A build 10–30 percig tart, közben a gép bezárható. A végén kapsz egy linket és egy QR-kódot (az [expo.dev](https://expo.dev) oldalon a projektnél is megtalálod).
+6. A telefonon nyisd meg a linket, töltsd le az `.apk` fájlt és telepítsd. Ha az Android rákérdez, engedélyezd az „ismeretlen forrásból” telepítést a böngészőnek.
+7. A gépen indítsd a dev szervert:
+   ```
+   npx expo start --dev-client
+   ```
+   Nyisd meg a telefonon a **Clapp** appot: ha a telefon és a gép ugyanazon a Wi-Fin van, megjelenik a listában a szerver, vagy olvasd be a QR-kódot. Ha nem találja, indítsd így: `npx expo start --dev-client --tunnel`.
+
+### Az adapter használata
+
+1. Dugd be az adaptert az autó OBD csatlakozójába (általában a kormány alatt), és add rá a gyújtást (vagy indítsd be a motort).
+2. A telefonon: **Beállítások → Bluetooth** → párosítsd az adaptert (neve általában `OBDII`, `OBD2` vagy `V-LINK`, a PIN `1234` vagy `0000`).
+3. Az appban nyisd meg az **OBD** fület, engedélyezd a „Közeli eszközök” jogosultságot, majd koppints az adapterre.
+4. Az első kapcsolódás 5–15 másodperc, mert az adapter megkeresi az autó protokollját. Utána folyamatosan frissülnek az értékek, a csempék közül csak azok jelennek meg, amiket az autó támogat.
+
+Ha az adapter nem jelenik meg a párosítható eszközök között, valószínűleg Bluetooth Low Energy (BLE) típusú, amit ez a verzió még nem kezel.
+
 ## Mappaszerkezet
 
 ```
@@ -94,6 +140,7 @@ src/
   components/   # Újrahasználható komponensek
   constants/    # Téma, színek, térközök
   hooks/        # Saját hookok
-  lib/          # Supabase kliens és egyéb szolgáltatások
+  lib/          # Supabase kliens, OBD (ELM327) logika és egyéb szolgáltatások
+modules/        # Helyi natív Expo modulok (obd-bluetooth)
 assets/         # Ikonok, képek, splash
 ```
