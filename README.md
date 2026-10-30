@@ -76,6 +76,25 @@ A buildekhez a környezeti változókat az EAS-ben kell megadni (`eas env:create
 
 Az `app.json`-ban a `com.clapp.app` bundle azonosító helykitöltő: az első áruházi build előtt cseréld a sajátodra.
 
+## Automatikus Android build (parancsok nélkül)
+
+Minden alkalommal, amikor valami bekerül a `main` ágba (például merge-elsz egy PR-t), a GitHub magától elindít egy Android buildet az EAS-en ([`.github/workflows/android-build.yml`](.github/workflows/android-build.yml)). Ez **preview** build: önálló app, a teljes kód benne van, nem kell hozzá gép vagy dev szerver.
+
+### Egyszeri beállítás (kb. 3 perc, csak kattintás)
+
+1. **Expo token**: [expo.dev → Access tokens](https://expo.dev/settings/access-tokens) → **Create token** → név: `github` → **Create**, és másold ki a tokent (csak egyszer látod).
+2. **GitHub secret**: a repóban **Settings → Secrets and variables → Actions → New repository secret**. Name: `EXPO_TOKEN`, Secret: a kimásolt token → **Add secret**.
+3. Első build kézzel: **Actions → Android build → Run workflow → Run workflow**.
+
+### Telepítés a telefonra
+
+- A futás végén a GitHub **Actions** fülön, a futás összefoglalójában ott a build linkje. Ugyanez megtalálható az [expo.dev](https://expo.dev) oldalon a Clapp projekt **Builds** listájában.
+- A build 10–30 perc. Utána nyisd meg a linket a telefonon → **Install** → telepítsd az `.apk`-t (az első alkalommal engedélyezd az „ismeretlen forrásból” telepítést a böngészőnek). Az új verzió a régire települ, az adatok megmaradnak.
+
+A **development** profilt (dev client) is lehet kézzel indítani: **Run workflow** → Build profil: `development`.
+
+A Supabase adatokat (`EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`) az expo.dev oldalon a projekt **Environment variables** menüjében kell megadni a `preview` környezethez, mert a `.env` nem kerül fel.
+
 ## Hasznos parancsok
 
 ```bash
@@ -93,6 +112,8 @@ Az **OBD** fül egy olcsó ELM327 Bluetooth adapterről olvas élő adatokat (fo
 A natív rész a [`modules/obd-bluetooth`](modules/obd-bluetooth) helyi Expo modulban van, az ELM327 protokoll a [`src/lib/obd`](src/lib/obd) mappában.
 
 ### Development build telepítése Windowson (cmd)
+
+A legegyszerűbb az [automatikus build](#automatikus-android-build-parancsok-nélkül): az OBD fül abban is működik. Az alábbi kézi út csak akkor kell, ha dev szerverrel akarsz fejleszteni.
 
 Egyszer kell megcsinálni, és csak akkor újra, ha natív kód vagy natív csomag változik. A JavaScript módosítások a dev szerverről jönnek.
 
