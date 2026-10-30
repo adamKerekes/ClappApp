@@ -7,6 +7,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,7 +17,19 @@ import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { Elm327 } from '@/lib/obd/elm327';
-import { LIVE_PIDS } from '@/lib/obd/pids';
+import { AFTERTREATMENT_PIDS, LIVE_PIDS, type PidDefinition } from '@/lib/obd/pids';
+import {
+  changedZones,
+  formatLogCsv,
+  formatScan,
+  MAX_LOG_ROWS,
+  PSA_ECUS,
+  readLogRow,
+  scanPsaZones,
+  type PsaEcu,
+  type PsaLogRow,
+  type PsaScanResult,
+} from '@/lib/obd/psa';
 
 import { ObdBluetooth, type PairedDevice } from '../../modules/obd-bluetooth';
 
@@ -32,6 +45,25 @@ async function requestBluetoothPermission(): Promise<boolean> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function ValueTile({ label, value, unit, decimals }: {
+  label: string;
+  value: number | null | undefined;
+  unit: string;
+  decimals: number;
+}) {
+  return (
+    <ThemedView type="backgroundElement" style={styles.tile}>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+      <ThemedText style={styles.value}>
+        {value == null ? '–' : value.toFixed(decimals)}
+        <ThemedText type="small"> {unit}</ThemedText>
+      </ThemedText>
+    </ThemedView>
+  );
 }
 
 function Button({
@@ -69,6 +101,14 @@ export default function ObdScreen() {
   const [dtcs, setDtcs] = useState<string[] | null>(null);
   const [dtcBusy, setDtcBusy] = useState(false);
   const [pids, setPids] = useState(LIVE_PIDS);
+  const [aftertreatmentPids, setAftertreatmentPids] = useState<PidDefinition[]>([]);
+  const [scan, setScan] = useState<PsaScanResult | null>(null);
+  const [previousScan, setPreviousScan] = useState<PsaScanResult | null>(null);
+  const [scanProgress, setScanProgress] = useState<string | null>(null);
+  const scanCancelRef = useRef(false);
+  const [logRows, setLogRows] = useState<PsaLogRow[]>([]);
+  const [logging, setLogging] = useState(false);
+  const logStopRef = useRef(false);
 
   const elmRef = useRef<Elm327 | null>(null);
   // Minden kapcsolódás új azonosítót kap, így a régi lekérdező ciklus biztosan leáll.
@@ -106,7 +146,7 @@ export default function ObdScreen() {
     setStatus('idle');
   }, []);
 
-  const poll = useCallback(async (elm: Elm327, supported: typeof LIVE_PIDS) => {
+  const poll = useCallback(async (elm: Elm327, supported: PidDefinition[]) => {
     const pollId = ++pollIdRef.current;
     const isActive = () => pollIdRef.current === pollId;
     let round = 0;
@@ -149,16 +189,97 @@ export default function ObdScreen() {
       await elm.initialize();
       elmRef.current = elm;
       const supported = LIVE_PIDS.filter((p) => elm.isSupported(p.pid));
+      // A szélessávú lambda (34) mellett a régi (24) felesleges.
+      const aftertreatment = AFTERTREATMENT_PIDS.filter(
+        (p) => elm.isSupported(p.pid) && !(p.pid === '24' && elm.isSupported('34'))
+      );
       setPids(supported);
+      setAftertreatmentPids(aftertreatment);
       setInfo(`${elm.adapterVersion} · ${elm.protocol}`);
       setStatus('connected');
-      poll(elm, supported);
+      poll(elm, [...supported, ...aftertreatment]);
     } catch (e) {
       ObdBluetooth.disconnect();
       setStatus('idle');
       setError(errorMessage(e));
     }
   };
+
+  const scanPsa = async (ecu: PsaEcu) => {
+    const elm = elmRef.current;
+    if (!elm) return;
+    // A gyári olvasás alatt a szabványos lekérdezés szünetel.
+    stopPolling();
+    scanCancelRef.current = false;
+    setScanProgress('Kapcsolódás…');
+    try {
+      const result = await scanPsaZones(
+        elm,
+        ecu,
+        (done, total) => setScanProgress(`${done} / ${total}`),
+        () => scanCancelRef.current
+      );
+      setPreviousScan(scan?.ecu.id === ecu.id ? scan : null);
+      setLogRows([]);
+      setScan(result);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setScanProgress(null);
+      if (elmRef.current === elm && ObdBluetooth?.isConnected()) {
+        poll(elm, [...pids, ...aftertreatmentPids]);
+      }
+    }
+  };
+
+  /** Vezetés közbeni napló: körönként a válaszoló zónák és a szabványos adatok. */
+  const startLogging = async () => {
+    const elm = elmRef.current;
+    if (!elm || !scan?.session) return;
+    const allPids = [...pids, ...aftertreatmentPids];
+    const zones = scan.zones.map((z) => z.zone);
+    // A szabványos lekérdezés helyett ez a ciklus fut, ugyanazzal az azonosítóval áll le.
+    const logId = ++pollIdRef.current;
+    const isActive = () => pollIdRef.current === logId;
+    logStopRef.current = false;
+    setLogRows([]);
+    setLogging(true);
+    try {
+      while (isActive()) {
+        const row = await readLogRow(elm, scan.ecu, zones, allPids);
+        if (!isActive()) break;
+        setValues((prev) => ({ ...prev, ...row.values }));
+        setLogRows((prev) => [...prev, row].slice(-MAX_LOG_ROWS));
+      }
+    } catch (e) {
+      if (!ObdBluetooth?.isConnected()) {
+        setError(errorMessage(e));
+        disconnect();
+      }
+    } finally {
+      setLogging(false);
+      // Csak a kör végén indulhat újra a szabványos lekérdezés, addig a gyári fejléc él.
+      if (logStopRef.current && elmRef.current === elm && ObdBluetooth?.isConnected()) {
+        poll(elm, allPids);
+      }
+    }
+  };
+
+  /** A leállítás jelzés; a ciklus a kör végén lép ki. */
+  const stopLogging = () => {
+    logStopRef.current = true;
+    stopPolling();
+  };
+
+  const shareLog = () => {
+    if (scan) Share.share({ message: formatLogCsv(scan.ecu, logRows, [...pids, ...aftertreatmentPids]) });
+  };
+
+  const shareScan = () => {
+    if (scan) Share.share({ message: formatScan(scan, previousScan) });
+  };
+
+  const changed = scan ? changedZones(scan, previousScan) : new Set<string>();
 
   const readDtcs = async () => {
     const elm = elmRef.current;
@@ -303,21 +424,94 @@ export default function ObdScreen() {
                   <ThemedText type="small"> V</ThemedText>
                 </ThemedText>
               </ThemedView>
-              {pids.map((pid) => {
-                const value = values[pid.pid];
-                return (
-                  <ThemedView key={pid.pid} type="backgroundElement" style={styles.tile}>
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {pid.label}
-                    </ThemedText>
-                    <ThemedText style={styles.value}>
-                      {value == null ? '–' : value.toFixed(pid.decimals)}
-                      <ThemedText type="small"> {pid.unit}</ThemedText>
-                    </ThemedText>
-                  </ThemedView>
-                );
-              })}
+              {pids.map((pid) => (
+                <ValueTile key={pid.pid} {...pid} value={values[pid.pid]} />
+              ))}
             </ThemedView>
+
+            <ThemedText type="smallBold">Katalizátor és DPF (kísérleti)</ThemedText>
+            {aftertreatmentPids.length === 0 ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                Az autó a szabványos csatornán nem ad katalizátor vagy DPF adatot.
+              </ThemedText>
+            ) : (
+              <ThemedView style={styles.grid}>
+                {aftertreatmentPids.map((pid) => (
+                  <ValueTile key={pid.pid} {...pid} value={values[pid.pid]} />
+                ))}
+              </ThemedView>
+            )}
+
+            <ThemedView type="backgroundElement" style={styles.card}>
+              <ThemedText type="smallBold">Gyári adatok (Peugeot / Citroën)</ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                A koromtöltöttséget, a regenerálást és az adalékszintet csak a gyári csatornán adja
+                ki a vezérlő. Ez végigolvassa és nyersen megmutatja az adatait (csak olvas, semmit
+                nem ír a vezérlőbe), kb. 1 perc. Ha regenerálás előtt és után is beolvasod, a
+                megváltozott sorok csillagot kapnak. A Megosztás gombbal el tudod küldeni.
+              </ThemedText>
+              <ThemedView type="backgroundElement" style={styles.row}>
+                {PSA_ECUS.map((ecu) => (
+                  <Button
+                    key={ecu.id}
+                    title={ecu.label}
+                    onPress={() => scanPsa(ecu)}
+                    disabled={scanProgress !== null || dtcBusy || logging}
+                  />
+                ))}
+                {scanProgress !== null && (
+                  <>
+                    <ActivityIndicator />
+                    <ThemedText type="small">{scanProgress}</ThemedText>
+                    <Button title="Leállítás" onPress={() => (scanCancelRef.current = true)} />
+                  </>
+                )}
+              </ThemedView>
+              {scan && (
+                <>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {scan.ecu.label}, {scan.time.toLocaleTimeString('hu-HU')}:{' '}
+                    {scan.session
+                      ? `${scan.zones.length} zóna válaszolt.`
+                      : 'a vezérlő nem válaszolt a gyári címen.'}
+                  </ThemedText>
+                  {scan.zones.map((z) => (
+                    <ThemedText key={z.zone} type="code">
+                      {changed.has(z.zone) ? '* ' : '  '}
+                      {z.zone}: {z.data}
+                    </ThemedText>
+                  ))}
+                  {scan.session && <Button title="Megosztás" onPress={shareScan} />}
+                </>
+              )}
+            </ThemedView>
+
+            {scan?.session && scan.zones.length > 0 && (
+              <ThemedView type="backgroundElement" style={styles.card}>
+                <ThemedText type="smallBold">Napló vezetés közben</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  Folyamatosan olvassa a fenti zónákat a fordulattal, sebességgel, hőfokokkal együtt.
+                  Egy hosszabb út (vagy egy regenerálás) naplójából visszafejthető, melyik zóna mit
+                  jelent. Utána a Megosztás gombbal küldd el.
+                </ThemedText>
+                <ThemedView type="backgroundElement" style={styles.row}>
+                  {logging ? (
+                    <Button title="Napló leállítása" onPress={stopLogging} />
+                  ) : (
+                    <Button
+                      title="Napló indítása"
+                      onPress={startLogging}
+                      disabled={scanProgress !== null || dtcBusy}
+                    />
+                  )}
+                  {logging && <ActivityIndicator />}
+                  <ThemedText type="small">{logRows.length} sor</ThemedText>
+                  {!logging && logRows.length > 0 && (
+                    <Button title="Napló megosztása" onPress={shareLog} />
+                  )}
+                </ThemedView>
+              </ThemedView>
+            )}
 
             <ThemedView type="backgroundElement" style={styles.card}>
               <ThemedText type="smallBold">Hibakódok</ThemedText>
@@ -333,8 +527,8 @@ export default function ObdScreen() {
                 </ThemedText>
               ))}
               <ThemedView type="backgroundElement" style={styles.row}>
-                <Button title="Kiolvasás" onPress={readDtcs} disabled={dtcBusy} />
-                <Button title="Törlés" onPress={clearDtcs} disabled={dtcBusy} />
+                <Button title="Kiolvasás" onPress={readDtcs} disabled={dtcBusy || scanProgress !== null || logging} />
+                <Button title="Törlés" onPress={clearDtcs} disabled={dtcBusy || scanProgress !== null || logging} />
                 {dtcBusy && <ActivityIndicator />}
               </ThemedView>
             </ThemedView>
