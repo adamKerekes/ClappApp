@@ -3,6 +3,8 @@ export type GaugeZone = { from: number; to: number; color: GaugeColor };
 
 export type GaugeColor = 'green' | 'orange' | 'red';
 
+export type GaugeIcon = 'battery' | 'coolant' | 'thermo';
+
 export type GaugeDefinition = {
   min: number;
   max: number;
@@ -10,14 +12,16 @@ export type GaugeDefinition = {
   step: number;
   /** Rövid felirat a számlapon, pl. VOLT, TEMP. */
   caption: string;
+  /** Ikon a számlapon a felirat helyett. */
+  icon?: GaugeIcon;
   zones: GaugeZone[];
 };
 
 export const GAUGE_COLORS: Record<GaugeColor, string> = {
-  // A normál tartomány a műszer világító cián színe.
-  green: '#3EE0FF',
-  orange: '#FFB020',
-  red: '#FF3B30',
+  // A normál tartomány a számlap fehér színe.
+  green: '#F2F2F2',
+  orange: '#FFA133',
+  red: '#E3323C',
 };
 
 const voltage: GaugeDefinition = {
@@ -25,6 +29,7 @@ const voltage: GaugeDefinition = {
   max: 16,
   step: 2,
   caption: 'VOLT',
+  icon: 'battery',
   zones: [
     { from: 8, to: 11.8, color: 'red' },
     { from: 11.8, to: 12.4, color: 'orange' },
@@ -47,6 +52,7 @@ export const GAUGES: Record<string, GaugeDefinition> = {
     max: 140,
     step: 20,
     caption: 'TEMP',
+    icon: 'coolant',
     zones: [
       { from: 40, to: 105, color: 'green' },
       { from: 105, to: 115, color: 'orange' },
@@ -59,6 +65,7 @@ export const GAUGES: Record<string, GaugeDefinition> = {
     max: 80,
     step: 20,
     caption: 'AIR',
+    icon: 'thermo',
     zones: [
       { from: -20, to: 45, color: 'green' },
       { from: 45, to: 60, color: 'orange' },

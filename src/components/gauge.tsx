@@ -5,6 +5,7 @@ import Svg, {
   G,
   Line,
   LinearGradient,
+  Path,
   Polygon,
   RadialGradient,
   Rect,
@@ -16,11 +17,12 @@ import Svg, {
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
-import { GAUGE_COLORS, type GaugeDefinition } from '@/lib/obd/gauges';
+import { GAUGE_COLORS, type GaugeDefinition, type GaugeIcon } from '@/lib/obd/gauges';
 
 /**
- * Klasszikus kerek autós műszer: krómozott perem, fekete számlap, világító skála,
- * piros mutató és alul egy kis LCD kijelző a pontos értékkel.
+ * Klasszikus autós műszer: vastag fényes krómgyűrű, fekete számlap üveges csillogással,
+ * fehér osztások (a figyelmeztető tartomány narancs, a veszélyes piros), piros mutató
+ * fényes fekete aggyal, két csavarfej és alul cián LCD a pontos értékkel és mértékegységgel.
  * A skála 270°-os, alul van a rés (0° felfelé mutat).
  */
 const SWEEP = 270;
@@ -39,6 +41,46 @@ function formatLimit(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+/** Kis fehér ikonok a számlapra, egy 20×20-as területre rajzolva. */
+function Icon({ icon, x, y }: { icon: GaugeIcon; x: number; y: number }) {
+  const white = '#F2F2F2';
+  return (
+    <G transform={`translate(${x - 10} ${y - 10})`}>
+      {icon === 'battery' && (
+        <>
+          <Rect x={1} y={5} width={18} height={12} rx={1.5} fill="none" stroke={white} strokeWidth={1.8} />
+          <Rect x={4} y={2.5} width={3} height={2.5} fill={white} />
+          <Rect x={13} y={2.5} width={3} height={2.5} fill={white} />
+          <Line x1={3.5} y1={11} x2={7.5} y2={11} stroke={white} strokeWidth={1.6} />
+          <Line x1={12.5} y1={11} x2={16.5} y2={11} stroke={white} strokeWidth={1.6} />
+          <Line x1={14.5} y1={9} x2={14.5} y2={13} stroke={white} strokeWidth={1.6} />
+        </>
+      )}
+      {(icon === 'coolant' || icon === 'thermo') && (
+        <>
+          <Rect x={8} y={0} width={4} height={12} rx={2} fill="none" stroke={white} strokeWidth={1.6} />
+          <Circle cx={10} cy={13.5} r={3.2} fill={white} />
+          <Line x1={12} y1={3} x2={15} y2={3} stroke={white} strokeWidth={1.4} />
+          <Line x1={12} y1={6.5} x2={15} y2={6.5} stroke={white} strokeWidth={1.4} />
+        </>
+      )}
+      {icon === 'coolant' && (
+        <Path d="M0 19 q2.5 -2 5 0 t5 0 t5 0 t5 0" fill="none" stroke={white} strokeWidth={1.5} />
+      )}
+    </G>
+  );
+}
+
+function Screw({ x, y }: { x: number; y: number }) {
+  return (
+    <G>
+      <Circle cx={x} cy={y} r={3.6} fill="url(#screw)" stroke="#111" strokeWidth={0.6} />
+      <Line x1={x - 2.2} y1={y} x2={x + 2.2} y2={y} stroke="#1A1A1A" strokeWidth={0.9} />
+      <Line x1={x} y1={y - 2.2} x2={x} y2={y + 2.2} stroke="#1A1A1A" strokeWidth={0.9} />
+    </G>
+  );
+}
+
 export function Gauge({
   label,
   value,
@@ -52,7 +94,7 @@ export function Gauge({
   decimals: number;
   gauge: GaugeDefinition;
 }) {
-  const { min, max, step, caption, zones } = gauge;
+  const { min, max, step, caption, icon, zones } = gauge;
   const toAngle = (v: number) => START + ((clamp(v, min, max) - min) / (max - min)) * SWEEP;
   const colorAt = (v: number) => {
     const zone = zones.find((z) => v >= z.from && v <= z.to);
@@ -66,10 +108,12 @@ export function Gauge({
   }
 
   const needleAngle = value == null ? START : toAngle(value);
-  const tip = polar(needleAngle, 78);
-  const tail = polar(needleAngle + 180, 16);
-  const left = polar(needleAngle - 90, 3.5);
-  const right = polar(needleAngle + 90, 3.5);
+  const tip = polar(needleAngle, 80);
+  const tail = polar(needleAngle + 180, 22);
+  const left = polar(needleAngle - 90, 2.8);
+  const right = polar(needleAngle + 90, 2.8);
+  const tailLeft = polar(needleAngle + 180 - 12, 20);
+  const tailRight = polar(needleAngle + 180 + 12, 20);
   const lcdText = value == null ? '----' : value.toFixed(decimals);
 
   return (
@@ -79,36 +123,51 @@ export function Gauge({
       </ThemedText>
       <Svg viewBox="0 0 200 200" style={styles.dial}>
         <Defs>
-          <LinearGradient id="chrome" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#FFFFFF" />
-            <Stop offset="0.35" stopColor="#B9BEC5" />
-            <Stop offset="0.55" stopColor="#F4F6F8" />
-            <Stop offset="1" stopColor="#7D838B" />
+          {/* Vastag, fényes króm: világos és sötét sávok váltakoznak */}
+          <LinearGradient id="chrome" x1="0.15" y1="0" x2="0.85" y2="1">
+            <Stop offset="0" stopColor="#FDFDFB" />
+            <Stop offset="0.18" stopColor="#8C847A" />
+            <Stop offset="0.38" stopColor="#E9E6E0" />
+            <Stop offset="0.55" stopColor="#5E574F" />
+            <Stop offset="0.75" stopColor="#D8D3CC" />
+            <Stop offset="1" stopColor="#4A443E" />
           </LinearGradient>
-          <RadialGradient id="face" cx="50%" cy="45%" r="55%">
-            <Stop offset="0" stopColor="#1C2228" />
-            <Stop offset="1" stopColor="#050607" />
-          </RadialGradient>
-          <LinearGradient id="lcd" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor="#9AF1FF" />
-            <Stop offset="1" stopColor="#36BFE0" />
+          <LinearGradient id="chromeInner" x1="0.85" y1="1" x2="0.15" y2="0">
+            <Stop offset="0" stopColor="#F5F3EF" />
+            <Stop offset="0.5" stopColor="#6E675F" />
+            <Stop offset="1" stopColor="#2B2723" />
           </LinearGradient>
-          <RadialGradient id="hub" cx="40%" cy="35%" r="70%">
-            <Stop offset="0" stopColor="#3A3F45" />
+          <RadialGradient id="face" cx="50%" cy="50%" r="50%">
+            <Stop offset="0" stopColor="#151515" />
+            <Stop offset="0.85" stopColor="#050505" />
             <Stop offset="1" stopColor="#000000" />
+          </RadialGradient>
+          <LinearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity="0.16" />
+            <Stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
+          </LinearGradient>
+          <RadialGradient id="hub" cx="35%" cy="30%" r="75%">
+            <Stop offset="0" stopColor="#8A8A8A" />
+            <Stop offset="0.35" stopColor="#1E1E1E" />
+            <Stop offset="1" stopColor="#000000" />
+          </RadialGradient>
+          <RadialGradient id="screw" cx="35%" cy="30%" r="80%">
+            <Stop offset="0" stopColor="#9A9A9A" />
+            <Stop offset="1" stopColor="#3A3A3A" />
           </RadialGradient>
         </Defs>
 
-        {/* Krómozott perem és számlap */}
+        {/* Krómgyűrű és számlap */}
         <Circle cx={C} cy={C} r={99} fill="url(#chrome)" />
-        <Circle cx={C} cy={C} r={89} fill="#0A0C0E" />
-        <Circle cx={C} cy={C} r={87} fill="url(#face)" />
+        <Circle cx={C} cy={C} r={90} fill="url(#chromeInner)" />
+        <Circle cx={C} cy={C} r={86} fill="#000" />
+        <Circle cx={C} cy={C} r={85} fill="url(#face)" />
 
-        {/* Osztások: a normál tartomány cián, a figyelmeztető sávok narancs és piros */}
+        {/* Osztások és számok */}
         {ticks.map(({ value: v, major }) => {
           const angle = toAngle(v);
-          const outer = polar(angle, 81);
-          const inner = polar(angle, major ? 67 : 74);
+          const outer = polar(angle, 82);
+          const inner = polar(angle, major ? 68 : 75);
           return (
             <Line
               key={v}
@@ -117,8 +176,7 @@ export function Gauge({
               x2={inner.x}
               y2={inner.y}
               stroke={colorAt(v)}
-              strokeWidth={major ? 4 : 2}
-              strokeLinecap="round"
+              strokeWidth={major ? 4.5 : 1.8}
             />
           );
         })}
@@ -130,9 +188,10 @@ export function Gauge({
               <SvgText
                 key={`label-${v}`}
                 x={pos.x}
-                y={pos.y + 5}
-                fontSize={14}
+                y={pos.y + 5.5}
+                fontSize={15}
                 fontWeight="bold"
+                fontFamily="Arial, Helvetica, sans-serif"
                 fill={colorAt(v)}
                 textAnchor="middle">
                 {formatLimit(v)}
@@ -140,37 +199,53 @@ export function Gauge({
             );
           })}
 
-        <SvgText x={C} y={72} fontSize={13} fontWeight="bold" fontStyle="italic" fill="#3EE0FF" textAnchor="middle">
-          {caption}
-        </SvgText>
-        <SvgText x={C} y={128} fontSize={12} fontWeight="bold" fill="#3EE0FF" textAnchor="middle">
-          {unit}
-        </SvgText>
+        {icon ? (
+          <Icon icon={icon} x={C} y={68} />
+        ) : (
+          <SvgText
+            x={C}
+            y={73}
+            fontSize={12}
+            fontWeight="bold"
+            fontFamily="Arial, Helvetica, sans-serif"
+            fill="#F2F2F2"
+            textAnchor="middle">
+            {caption}
+          </SvgText>
+        )}
 
-        {/* LCD kijelző */}
-        <Rect x={58} y={148} width={84} height={22} rx={2} fill="url(#lcd)" />
+        <Screw x={68} y={116} />
+        <Screw x={132} y={116} />
+
+        {/* LCD kijelző mértékegységgel */}
+        <Rect x={64} y={150} width={72} height={20} fill="#3DF2F2" stroke="#0E3B3B" strokeWidth={1.2} />
         <SvgText
-          x={138}
+          x={132}
           y={165}
-          fontSize={16}
+          fontSize={14}
           fontWeight="bold"
           fontFamily="monospace"
-          fill="#0B2530"
+          fill="#0A1414"
           textAnchor="end">
           {lcdText}
-          <TSpan fontSize={13} dx={3}>
+          <TSpan fontSize={11} dx={2}>
             {unit}
           </TSpan>
         </SvgText>
 
-        {/* Mutató és agy */}
-        <G>
-          <Polygon
-            points={`${tail.x},${tail.y} ${left.x},${left.y} ${tip.x},${tip.y} ${right.x},${right.y}`}
-            fill="#FF2A1F"
-          />
-          <Circle cx={C} cy={C} r={14} fill="url(#hub)" stroke="#2A2E33" strokeWidth={1.5} />
-        </G>
+        {/* Mutató ellensúllyal és fényes agy */}
+        <Polygon
+          points={`${tail.x},${tail.y} ${left.x},${left.y} ${tip.x},${tip.y} ${right.x},${right.y}`}
+          fill="#E3323C"
+        />
+        <Polygon points={`${tailLeft.x},${tailLeft.y} ${C},${C} ${tailRight.x},${tailRight.y}`} fill="#B8222B" />
+        <Circle cx={C} cy={C} r={10} fill="url(#hub)" />
+
+        {/* Üveges csillogás a felső részen */}
+        <Path
+          d={`M ${C - 78} ${C - 8} A 80 80 0 0 1 ${C + 78} ${C - 8} Q ${C} ${C - 40} ${C - 78} ${C - 8} Z`}
+          fill="url(#glass)"
+        />
       </Svg>
     </ThemedView>
   );
