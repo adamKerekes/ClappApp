@@ -294,7 +294,26 @@ export default function ObdScreen() {
     }
   };
 
+  const doClearDtcs = async () => {
+    const elm = elmRef.current;
+    if (!elm) return;
+    setDtcBusy(true);
+    try {
+      await elm.clearDtcs();
+      setDtcs(await elm.readDtcs());
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setDtcBusy(false);
+    }
+  };
+
   const clearDtcs = () => {
+    // Weben az Alert.alert nem jelenik meg, ott a böngésző saját kérdését használjuk.
+    if (Platform.OS === 'web') {
+      if (window.confirm('Törlöd a tárolt hibakódokat?')) doClearDtcs();
+      return;
+    }
     Alert.alert(
       'Hibakódok törlése',
       'Ez törli a tárolt hibakódokat és lekapcsolja a motorhiba lámpát. Csak járó motornál vagy ráadott gyújtásnál, álló autóval csináld.',
@@ -303,19 +322,7 @@ export default function ObdScreen() {
         {
           text: 'Törlés',
           style: 'destructive',
-          onPress: async () => {
-            const elm = elmRef.current;
-            if (!elm) return;
-            setDtcBusy(true);
-            try {
-              await elm.clearDtcs();
-              setDtcs(await elm.readDtcs());
-            } catch (e) {
-              setError(errorMessage(e));
-            } finally {
-              setDtcBusy(false);
-            }
-          },
+          onPress: doClearDtcs,
         },
       ]
     );
@@ -352,6 +359,15 @@ export default function ObdScreen() {
           </ThemedView>
         )}
 
+        {Platform.OS === 'web' && (
+          <ThemedView type="backgroundElement" style={styles.card}>
+            <ThemedText type="small">
+              Webes előnézet: itt nincs Bluetooth, egy kitalált adapter és autó adatait látod.
+              Válaszd az „OBDII (demo)” eszközt.
+            </ThemedText>
+          </ThemedView>
+        )}
+
         {error && (
           <ThemedView type="backgroundElement" style={styles.card}>
             <ThemedText type="smallBold" style={styles.errorText}>
@@ -369,10 +385,12 @@ export default function ObdScreen() {
             </ThemedText>
             <ThemedView style={styles.row}>
               <Button title="Lista frissítése" onPress={loadDevices} />
-              <Button
-                title="Bluetooth beállítások"
-                onPress={() => Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS')}
-              />
+              {Platform.OS === 'android' && (
+                <Button
+                  title="Bluetooth beállítások"
+                  onPress={() => Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS')}
+                />
+              )}
             </ThemedView>
 
             <ThemedText type="smallBold">Párosított eszközök</ThemedText>
@@ -548,6 +566,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   container: {
+    width: '100%',
     maxWidth: MaxContentWidth,
     flexGrow: 1,
     gap: Spacing.three,
