@@ -21,7 +21,7 @@ permissions:
 
 env:
   # Az előnézeti linkek eleje. Csak az első feltöltésnél számít, utána az Expo projekthez kötött.
-  DEV_DOMAIN: clapp-kerekes
+  DEV_DOMAIN: clapp-kerekes  # a projektnek már van domainje (clapp), ez csak tartalék
 
 jobs:
   deploy:

@@ -100,8 +100,8 @@ A Supabase adatokat (`EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`
 A `.github/workflows/web-preview.yml` minden pull requestnél és minden main-re kerülő változásnál
 feltölti az app webes változatát az EAS Hostingra, így linkről, telepítés nélkül megnézhető:
 
-- **Pull request:** `https://clapp-kerekes--pr-<szám>.expo.app`, a link kommentben jelenik meg a PR alatt, és minden push után frissül.
-- **main:** `https://clapp-kerekes--main.expo.app`
+- **Pull request:** `https://clapp--pr-<szám>.expo.app`, a link kommentben jelenik meg a PR alatt, és minden push után frissül.
+- **main:** `https://clapp--main.expo.app`
 
 Weben nincs Bluetooth, ezért az OBD képernyő egy kitalált adapter és autó adataival fut
 (`modules/obd-bluetooth/index.web.ts`). A telefonos appban továbbra is a valódi adapter megy.
