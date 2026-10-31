@@ -6,20 +6,27 @@ export type GaugeColor = 'green' | 'orange' | 'red';
 export type GaugeDefinition = {
   min: number;
   max: number;
+  /** Ennyinként kerül számozott osztás a skálára. */
+  step: number;
+  /** Rövid felirat a számlapon, pl. VOLT, TEMP. */
+  caption: string;
   zones: GaugeZone[];
 };
 
 export const GAUGE_COLORS: Record<GaugeColor, string> = {
-  green: '#30A46C',
-  orange: '#F5A524',
-  red: '#E5484D',
+  // A normál tartomány a műszer világító cián színe.
+  green: '#3EE0FF',
+  orange: '#FFB020',
+  red: '#FF3B30',
 };
 
 const voltage: GaugeDefinition = {
-  min: 10,
+  min: 8,
   max: 16,
+  step: 2,
+  caption: 'VOLT',
   zones: [
-    { from: 10, to: 11.8, color: 'red' },
+    { from: 8, to: 11.8, color: 'red' },
     { from: 11.8, to: 12.4, color: 'orange' },
     { from: 12.4, to: 14.8, color: 'green' },
     { from: 14.8, to: 15.2, color: 'orange' },
@@ -37,17 +44,21 @@ export const GAUGES: Record<string, GaugeDefinition> = {
   // Hűtővíz
   '05': {
     min: 40,
-    max: 130,
+    max: 140,
+    step: 20,
+    caption: 'TEMP',
     zones: [
       { from: 40, to: 105, color: 'green' },
       { from: 105, to: 115, color: 'orange' },
-      { from: 115, to: 130, color: 'red' },
+      { from: 115, to: 140, color: 'red' },
     ],
   },
   // Szívott levegő
   '0F': {
     min: -20,
     max: 80,
+    step: 20,
+    caption: 'AIR',
     zones: [
       { from: -20, to: 45, color: 'green' },
       { from: 45, to: 60, color: 'orange' },
@@ -55,21 +66,23 @@ export const GAUGES: Record<string, GaugeDefinition> = {
     ],
   },
   // Katalizátor előtte / utána
-  '3C': hotGas(650, 800),
-  '3E': hotGas(650, 800),
+  '3C': hotGas('CAT', 650, 800),
+  '3E': hotGas('CAT', 650, 800),
   // DPF előtte, kipufogógáz
-  '7C': hotGas(600, 750),
-  '78': hotGas(600, 750),
+  '7C': hotGas('DPF', 600, 750),
+  '78': hotGas('EGT', 600, 750),
 };
 
-function hotGas(warn: number, danger: number): GaugeDefinition {
+function hotGas(caption: string, warn: number, danger: number): GaugeDefinition {
   return {
     min: 0,
-    max: 900,
+    max: 1000,
+    step: 200,
+    caption,
     zones: [
       { from: 0, to: warn, color: 'green' },
       { from: warn, to: danger, color: 'orange' },
-      { from: danger, to: 900, color: 'red' },
+      { from: danger, to: 1000, color: 'red' },
     ],
   };
 }
