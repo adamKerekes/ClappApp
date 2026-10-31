@@ -233,7 +233,7 @@ export default function ObdScreen() {
       );
       setPids(supported);
       setAftertreatmentPids(aftertreatment);
-      setInfo(`${elm.adapterVersion} · ${elm.protocol}`);
+      setInfo(`VIN: ${elm.vin ?? 'nem olvasható'} · ${elm.adapterVersion} · ${elm.protocol}`);
       setStatus('connected');
       poll(elm, [...supported, ...aftertreatment]);
     } catch (e) {
@@ -338,7 +338,7 @@ export default function ObdScreen() {
     setLogging(true);
     try {
       const startedAt = new Date();
-      const file = await createLogFile(logCsvHeader(targets, allPids), startedAt);
+      const file = await createLogFile(logCsvHeader(targets, allPids, elm.vin), elm.vin, startedAt);
       setLogName(file.name);
       let count = 0;
       while (isActive()) {

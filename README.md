@@ -173,7 +173,7 @@ Mind csak olvas, a vezérlőbe semmit nem ír.
 
 1. **Ismert gyári adatok (OBDb lista):** az [OBDb Peugeot-508](https://github.com/OBDb/Peugeot-508) közösségi lista 353 kérését (367 jel névvel és mértékegységgel) egyszer végigkérdezi, és megjegyzi, melyikre válaszol az autó. A válaszolók névvel jelennek meg. A lista nincs autón igazolva, és főleg 2014 utáni motorokhoz készült.
 2. **Gyári adatok (zónák):** a motorvezérlő 21xx zónáit nyersen olvassa ki.
-3. **Napló vezetés közben:** az előző kettő válaszoló adatait és a szabványos értékeket körönként egy CSV fájlba menti a telefonon (`naplok` mappa, hosszkorlát nélkül). A **Mentett naplók** listából a fájl megosztható.
+3. **Napló vezetés közben:** az előző kettő válaszoló adatait és a szabványos értékeket körönként egy CSV fájlba menti a telefonon (`naplok` mappa, hosszkorlát nélkül). A **Mentett naplók** listából a fájl megosztható. A fájl nevében és fejlécében az autó alvázszáma (VIN) is szerepel, ha az autó megadja, így több autó naplói nem keverednek.
 4. **Elemzés a gépen:**
    ```bash
    python3 scripts/analyze-log.py clapp-naplo-2026-....csv --out jelentes.md
