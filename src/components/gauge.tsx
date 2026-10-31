@@ -10,6 +10,7 @@ import Svg, {
   Rect,
   Stop,
   Text as SvgText,
+  TSpan,
 } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
@@ -147,9 +148,9 @@ export function Gauge({
         </SvgText>
 
         {/* LCD kijelző */}
-        <Rect x={68} y={148} width={64} height={22} rx={2} fill="url(#lcd)" />
+        <Rect x={58} y={148} width={84} height={22} rx={2} fill="url(#lcd)" />
         <SvgText
-          x={128}
+          x={138}
           y={165}
           fontSize={16}
           fontWeight="bold"
@@ -157,6 +158,9 @@ export function Gauge({
           fill="#0B2530"
           textAnchor="end">
           {lcdText}
+          <TSpan fontSize={13} dx={3}>
+            {unit}
+          </TSpan>
         </SvgText>
 
         {/* Mutató és agy */}
