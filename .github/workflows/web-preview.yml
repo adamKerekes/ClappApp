@@ -1,0 +1,96 @@
+name: Web preview
+
+# Webes élő előnézet az EAS Hostingon (expo.app), telefonról is megnyitható linkkel.
+# - Pull requestnél: minden push után frissül a PR saját előnézete (…--pr-<szám>.expo.app),
+#   a link kommentben jelenik meg a PR alatt.
+# - main-en: a jelenlegi app előnézete (…--main.expo.app).
+# Weben nincs Bluetooth, az OBD képernyő kitalált adatokkal fut (modules/obd-bluetooth/index.web.ts).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: web-preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  # Az előnézeti linkek eleje. Csak az első feltöltésnél számít, utána az Expo projekthez kötött.
+  DEV_DOMAIN: clapp-kerekes  # a projektnek már van domainje (clapp), ez csak tartalék
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: EXPO_TOKEN ellenőrzése
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Hiányzik az EXPO_TOKEN secret. Repo → Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: npm ci
+
+      - name: Expo projekt összekötése
+        run: |
+          if ! grep -q '"projectId"' app.json; then
+            eas init --non-interactive --force
+          fi
+
+      # Az EAS "preview" környezet változóival (pl. Supabase kulcsok), ahogy az Android build is.
+      - name: Webes export
+        run: |
+          eas env:exec preview "npx expo export --platform web" --non-interactive \
+            || npx expo export --platform web
+
+      - name: Feltöltés
+        env:
+          ALIAS: ${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || 'main' }}
+        run: |
+          # Az első feltöltésnél még nincs előnézeti domain, ilyenkor a DEV_DOMAIN-nel hozzuk létre.
+          eas deploy --alias "$ALIAS" --json --non-interactive > deploy.json \
+            || eas deploy --alias "$ALIAS" --dev-domain "$DEV_DOMAIN" --json --non-interactive > deploy.json
+          cat deploy.json
+          URL=$(node -e "const d=require('./deploy.json'); console.log((d.aliases && d.aliases[0] && d.aliases[0].url) || d.url)")
+          echo "PREVIEW_URL=$URL" >> "$GITHUB_ENV"
+          {
+            echo "## Webes előnézet"
+            echo
+            echo "$URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Link a PR-hez
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- web-preview -->';
+            const body = `${marker}\n**Webes előnézet:** ${process.env.PREVIEW_URL}\n\n_Frissítve: ${context.sha.slice(0, 7)}. Weben az OBD képernyő kitalált adatokkal fut._`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find((c) => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

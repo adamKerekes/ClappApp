@@ -12,11 +12,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Gauge } from '@/components/gauge';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { Elm327 } from '@/lib/obd/elm327';
+import { GAUGES } from '@/lib/obd/gauges';
 import { AFTERTREATMENT_PIDS, LIVE_PIDS, type PidDefinition } from '@/lib/obd/pids';
 import {
   changedZones,
@@ -47,12 +49,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function ValueTile({ label, value, unit, decimals }: {
+/** A mutatós kijelzős értékek előre kerülnek, a többi utánuk. */
+const gaugesFirst = (pids: PidDefinition[]) => [
+  ...pids.filter((p) => GAUGES[p.pid]),
+  ...pids.filter((p) => !GAUGES[p.pid]),
+];
+
+function ValueTile({ pid, label, value, unit, decimals }: {
+  pid: string;
   label: string;
   value: number | null | undefined;
   unit: string;
   decimals: number;
 }) {
+  const gauge = GAUGES[pid];
+  if (gauge) {
+    return <Gauge label={label} value={value} unit={unit} decimals={decimals} gauge={gauge} />;
+  }
   return (
     <ThemedView type="backgroundElement" style={styles.tile}>
       <ThemedText type="small" themeColor="textSecondary">
@@ -294,7 +307,26 @@ export default function ObdScreen() {
     }
   };
 
+  const doClearDtcs = async () => {
+    const elm = elmRef.current;
+    if (!elm) return;
+    setDtcBusy(true);
+    try {
+      await elm.clearDtcs();
+      setDtcs(await elm.readDtcs());
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setDtcBusy(false);
+    }
+  };
+
   const clearDtcs = () => {
+    // Weben az Alert.alert nem jelenik meg, ott a böngésző saját kérdését használjuk.
+    if (Platform.OS === 'web') {
+      if (window.confirm('Törlöd a tárolt hibakódokat?')) doClearDtcs();
+      return;
+    }
     Alert.alert(
       'Hibakódok törlése',
       'Ez törli a tárolt hibakódokat és lekapcsolja a motorhiba lámpát. Csak járó motornál vagy ráadott gyújtásnál, álló autóval csináld.',
@@ -303,19 +335,7 @@ export default function ObdScreen() {
         {
           text: 'Törlés',
           style: 'destructive',
-          onPress: async () => {
-            const elm = elmRef.current;
-            if (!elm) return;
-            setDtcBusy(true);
-            try {
-              await elm.clearDtcs();
-              setDtcs(await elm.readDtcs());
-            } catch (e) {
-              setError(errorMessage(e));
-            } finally {
-              setDtcBusy(false);
-            }
-          },
+          onPress: doClearDtcs,
         },
       ]
     );
@@ -352,6 +372,15 @@ export default function ObdScreen() {
           </ThemedView>
         )}
 
+        {Platform.OS === 'web' && (
+          <ThemedView type="backgroundElement" style={styles.card}>
+            <ThemedText type="small">
+              Webes előnézet: itt nincs Bluetooth, egy kitalált adapter és autó adatait látod.
+              Válaszd az „OBDII (demo)” eszközt.
+            </ThemedText>
+          </ThemedView>
+        )}
+
         {error && (
           <ThemedView type="backgroundElement" style={styles.card}>
             <ThemedText type="smallBold" style={styles.errorText}>
@@ -369,10 +398,12 @@ export default function ObdScreen() {
             </ThemedText>
             <ThemedView style={styles.row}>
               <Button title="Lista frissítése" onPress={loadDevices} />
-              <Button
-                title="Bluetooth beállítások"
-                onPress={() => Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS')}
-              />
+              {Platform.OS === 'android' && (
+                <Button
+                  title="Bluetooth beállítások"
+                  onPress={() => Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS')}
+                />
+              )}
             </ThemedView>
 
             <ThemedText type="smallBold">Párosított eszközök</ThemedText>
@@ -415,16 +446,8 @@ export default function ObdScreen() {
             </ThemedView>
 
             <ThemedView style={styles.grid}>
-              <ThemedView type="backgroundElement" style={styles.tile}>
-                <ThemedText type="small" themeColor="textSecondary">
-                  Akkumulátor
-                </ThemedText>
-                <ThemedText style={styles.value}>
-                  {battery == null ? '–' : battery.toFixed(1)}
-                  <ThemedText type="small"> V</ThemedText>
-                </ThemedText>
-              </ThemedView>
-              {pids.map((pid) => (
+              <ValueTile pid="battery" label="Akkumulátor" value={battery} unit="V" decimals={1} />
+              {gaugesFirst(pids).map((pid) => (
                 <ValueTile key={pid.pid} {...pid} value={values[pid.pid]} />
               ))}
             </ThemedView>
@@ -436,7 +459,7 @@ export default function ObdScreen() {
               </ThemedText>
             ) : (
               <ThemedView style={styles.grid}>
-                {aftertreatmentPids.map((pid) => (
+                {gaugesFirst(aftertreatmentPids).map((pid) => (
                   <ValueTile key={pid.pid} {...pid} value={values[pid.pid]} />
                 ))}
               </ThemedView>
@@ -548,6 +571,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   container: {
+    width: '100%',
     maxWidth: MaxContentWidth,
     flexGrow: 1,
     gap: Spacing.three,
