@@ -121,13 +121,13 @@ npx expo-doctor           # függőségek és konfiguráció ellenőrzése
 
 ## OBD-II adapter (Bluetooth)
 
-Az **OBD** fül egy olcsó ELM327 Bluetooth adapterről olvas élő adatokat (fordulatszám, sebesség, hűtővíz, terhelés, akkufeszültség stb.) és hibakódokat. Csak **Androidon** működik, klasszikus Bluetooth (SPP) adapterrel, és **development build** kell hozzá: az Expo Go-ban nincs benne a Bluetooth modul.
+Az app egyetlen képernyője, az **OBD** képernyő egy olcsó ELM327 Bluetooth adapterről olvas élő adatokat (fordulatszám, sebesség, hűtővíz, terhelés, akkufeszültség stb.) és hibakódokat. Csak **Androidon** működik, klasszikus Bluetooth (SPP) adapterrel, és **development build** kell hozzá: az Expo Go-ban nincs benne a Bluetooth modul.
 
 A natív rész a [`modules/obd-bluetooth`](modules/obd-bluetooth) helyi Expo modulban van, az ELM327 protokoll a [`src/lib/obd`](src/lib/obd) mappában.
 
 ### Development build telepítése Windowson (cmd)
 
-A legegyszerűbb az [automatikus build](#automatikus-android-build-parancsok-nélkül): az OBD fül abban is működik. Az alábbi kézi út csak akkor kell, ha dev szerverrel akarsz fejleszteni.
+A legegyszerűbb az [automatikus build](#automatikus-android-build-parancsok-nélkül): az OBD képernyő abban is működik. Az alábbi kézi út csak akkor kell, ha dev szerverrel akarsz fejleszteni.
 
 Egyszer kell megcsinálni, és csak akkor újra, ha natív kód vagy natív csomag változik. A JavaScript módosítások a dev szerverről jönnek.
 
@@ -162,7 +162,7 @@ Egyszer kell megcsinálni, és csak akkor újra, ha natív kód vagy natív csom
 
 1. Dugd be az adaptert az autó OBD csatlakozójába (általában a kormány alatt), és add rá a gyújtást (vagy indítsd be a motort).
 2. A telefonon: **Beállítások → Bluetooth** → párosítsd az adaptert (neve általában `OBDII`, `OBD2` vagy `V-LINK`, a PIN `1234` vagy `0000`).
-3. Az appban nyisd meg az **OBD** fület, engedélyezd a „Közeli eszközök” jogosultságot, majd koppints az adapterre.
+3. Nyisd meg az appot (egyből az OBD képernyő jön), engedélyezd a „Közeli eszközök” jogosultságot, majd koppints az adapterre.
 4. Az első kapcsolódás 5–15 másodperc, mert az adapter megkeresi az autó protokollját. Utána folyamatosan frissülnek az értékek, a csempék közül csak azok jelennek meg, amiket az autó támogat.
 
 Ha az adapter nem jelenik meg a párosítható eszközök között, valószínűleg Bluetooth Low Energy (BLE) típusú, amit ez a verzió még nem kezel.
