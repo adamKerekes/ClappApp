@@ -153,6 +153,21 @@ Egyszer kell megcsinálni, és csak akkor újra, ha natív kód vagy natív csom
 
 Ha az adapter nem jelenik meg a párosítható eszközök között, valószínűleg Bluetooth Low Energy (BLE) típusú, amit ez a verzió még nem kezel.
 
+### Gyári adatok azonosítása (Peugeot / Citroën, kísérleti)
+
+Mind csak olvas, a vezérlőbe semmit nem ír.
+
+1. **Ismert gyári adatok (OBDb lista):** az [OBDb Peugeot-508](https://github.com/OBDb/Peugeot-508) közösségi lista 353 kérését (367 jel névvel és mértékegységgel) egyszer végigkérdezi, és megjegyzi, melyikre válaszol az autó. A válaszolók névvel jelennek meg. A lista nincs autón igazolva, és főleg 2014 utáni motorokhoz készült.
+2. **Gyári adatok (zónák):** a motorvezérlő 21xx zónáit nyersen olvassa ki.
+3. **Napló vezetés közben:** az előző kettő válaszoló adatait és a szabványos értékeket körönként egy CSV fájlba menti a telefonon (`naplok` mappa, hosszkorlát nélkül). A **Mentett naplók** listából a fájl megosztható.
+4. **Elemzés a gépen:**
+   ```bash
+   python3 scripts/analyze-log.py clapp-naplo-2026-....csv --out jelentes.md
+   ```
+   Kiírja, melyik bájt mozog együtt melyik ismert értékkel (és milyen képlettel), és alak szerint besorolja a többit (számláló, lenullázódó számláló, kapcsoló, állandó).
+
+Javasolt menet egy naplóhoz: hidegindítás után indítsd a naplót, 1 perc alapjárat, 3–4 gázfröccs állva (2000, 3000 1/min), utána városi szakasz, végül legalább 15–20 perc egyenletes országúti vagy autópályás út. Ha regenerálás közben is fut a napló, abból látszanak a DPF adatok.
+
 ## Mappaszerkezet
 
 ```
