@@ -28,6 +28,7 @@ import {
   logCsvLine,
   type LogTarget,
   readLogRow,
+  saveResultFile,
   type SavedLog,
   shareLogFile,
 } from '@/lib/obd/log';
@@ -64,7 +65,16 @@ async function requestBluetoothPermission(): Promise<boolean> {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  let message = error instanceof Error ? error.message : String(error);
+  // A natív modul hibáinak angol előtagja („Call to function … has been rejected. → Caused by:”).
+  message = message.replace(/^[\s\S]*Caused by:\s*/, '');
+  if (/nem válaszolt időben|timed? ?out/i.test(message)) {
+    return 'Az autó nem válaszol. Rá van adva a gyújtás, és az adapter be van dugva? Ha igen, válaszd le, és csatlakozz újra.';
+  }
+  if (/read failed|socket|broken pipe|connection/i.test(message)) {
+    return 'Megszakadt a Bluetooth kapcsolat az adapterrel. Ellenőrizd, hogy be van-e dugva, és csatlakozz újra.';
+  }
+  return message;
 }
 
 /** A mutatós kijelzős értékek előre kerülnek, a többi utánuk. */
@@ -257,8 +267,14 @@ export default function ObdScreen() {
         (done, total) => setScanProgress(`${done} / ${total}`),
         () => scanCancelRef.current
       );
-      setPreviousScan(scan?.ecu.id === ecu.id ? scan : null);
+      const previous = scan?.ecu.id === ecu.id ? scan : null;
+      setPreviousScan(previous);
       setScan(result);
+      if (result.session) {
+        saveResultFile(`zonak-${ecu.id}`, elm.vin, formatScan(result, previous), result.time)
+          .then(refreshSavedLogs)
+          .catch(() => {});
+      }
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -283,6 +299,9 @@ export default function ObdScreen() {
         () => probeCancelRef.current
       );
       setProbe(result);
+      saveResultFile('proba', result.vin, formatProbe(result), result.time)
+        .then(refreshSavedLogs)
+        .catch(() => {});
       setFactoryRaw(
         Object.fromEntries(result.groups.flatMap((g) => g.hits.map((h) => [commandKey(h.command), h.data])))
       );
@@ -685,21 +704,6 @@ export default function ObdScreen() {
               </ThemedView>
             )}
 
-            {savedLogs.length > 0 && (
-              <ThemedView type="backgroundElement" style={styles.card}>
-                <ThemedText type="smallBold">Mentett naplók</ThemedText>
-                {savedLogs.map((log) => (
-                  <ThemedView key={log.uri} type="backgroundElement" style={styles.row}>
-                    <ThemedText type="small" style={styles.logName}>
-                      {log.name} ({Math.max(1, Math.round(log.size / 1024))} kB)
-                    </ThemedText>
-                    <Button title="Megosztás" onPress={() => shareLog(log)} disabled={logging && log.name === logName} />
-                    <Button title="Törlés" onPress={() => removeLog(log)} disabled={logging && log.name === logName} />
-                  </ThemedView>
-                ))}
-              </ThemedView>
-            )}
-
             <ThemedView type="backgroundElement" style={styles.card}>
               <ThemedText type="smallBold">Hibakódok</ThemedText>
               {dtcs === null && (
@@ -720,6 +724,24 @@ export default function ObdScreen() {
               </ThemedView>
             </ThemedView>
           </>
+        )}
+
+        {savedLogs.length > 0 && (
+          <ThemedView type="backgroundElement" style={styles.card}>
+            <ThemedText type="smallBold">Mentett naplók és eredmények</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              Csatlakozás nélkül is megoszthatók (e-mail, Drive, üzenet).
+            </ThemedText>
+            {savedLogs.map((log) => (
+              <ThemedView key={log.uri} type="backgroundElement" style={styles.row}>
+                <ThemedText type="small" style={styles.logName}>
+                  {log.name} ({Math.max(1, Math.round(log.size / 1024))} kB)
+                </ThemedText>
+                <Button title="Megosztás" onPress={() => shareLog(log)} disabled={logging && log.name === logName} />
+                <Button title="Törlés" onPress={() => removeLog(log)} disabled={logging && log.name === logName} />
+              </ThemedView>
+            ))}
+          </ThemedView>
         )}
       </ThemedView>
     </ScrollView>

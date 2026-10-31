@@ -128,6 +128,19 @@ export async function createLogFile(header: string, vin: string | null, time = n
   };
 }
 
+/**
+ * Szöveges eredmény (próba, zónák) mentése a naplók mellé, hogy csatlakozás nélkül,
+ * később is megosztható legyen.
+ */
+export async function saveResultFile(kind: string, vin: string | null, text: string, time = new Date()) {
+  const { File } = await import('expo-file-system');
+  const dir = await logDirectory();
+  const stamp = time.toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const file = new File(dir, `clapp-${kind}-${vin ?? 'ismeretlen-auto'}-${stamp}.txt`);
+  file.create({ overwrite: true });
+  await file.write(text);
+}
+
 export type SavedLog = { name: string; uri: string; size: number };
 
 /** A telefonon tárolt naplók, a legújabb elöl. */
@@ -136,7 +149,7 @@ export async function listLogFiles(): Promise<SavedLog[]> {
   const dir = await logDirectory();
   return dir
     .list()
-    .filter((item): item is InstanceType<typeof File> => item instanceof File && item.name.endsWith('.csv'))
+    .filter((item): item is InstanceType<typeof File> => item instanceof File && /\.(csv|txt)$/.test(item.name))
     .map((f) => ({ name: f.name, uri: f.uri, size: f.size ?? 0 }))
     .sort((a, b) => b.name.slice(-23).localeCompare(a.name.slice(-23)));
 }
@@ -149,5 +162,6 @@ export async function deleteLogFile(uri: string): Promise<void> {
 /** A fájl megosztása (e-mail, Drive, üzenet…). */
 export async function shareLogFile(uri: string): Promise<void> {
   const Sharing = await import('expo-sharing');
-  await Sharing.shareAsync(uri, { mimeType: 'text/csv', dialogTitle: 'Clapp napló megosztása' });
+  const mimeType = uri.endsWith('.txt') ? 'text/plain' : 'text/csv';
+  await Sharing.shareAsync(uri, { mimeType, dialogTitle: 'Clapp fájl megosztása' });
 }
