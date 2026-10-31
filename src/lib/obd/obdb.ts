@@ -122,6 +122,8 @@ export type ObdbGroupResult = {
 
 export type ObdbProbeResult = {
   time: Date;
+  /** Az autó alvázszáma, ha kiolvasható */
+  vin: string | null;
   groups: ObdbGroupResult[];
 };
 
@@ -140,7 +142,7 @@ export async function probeObdb(
   onProgress: (done: number, total: number) => void,
   isCancelled: () => boolean
 ): Promise<ObdbProbeResult> {
-  const result: ObdbProbeResult = { time: new Date(), groups: [] };
+  const result: ObdbProbeResult = { time: new Date(), vin: elm.vin, groups: [] };
   const groups = new Map<string, ObdbCommand[]>();
   for (const c of OBDB_COMMANDS) {
     const key = `${c.tx}|${c.session ?? ''}`;
@@ -220,6 +222,7 @@ export function formatProbe(probe: ObdbProbeResult): string {
   const lines = [
     'Clapp – OBDb Peugeot 508 próba',
     probe.time.toLocaleString('hu-HU'),
+    `VIN: ${probe.vin ?? 'ismeretlen'}`,
     `Forrás: github.com/OBDb/Peugeot-508 (CC BY-SA 4.0), ${OBDB_COMMANDS.length} kérés, ${OBDB_SIGNAL_COUNT} jel`,
   ];
   for (const g of probe.groups) {

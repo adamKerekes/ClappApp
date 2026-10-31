@@ -76,6 +76,9 @@ function respond(command: string): string {
     return 'NO DATA';
   }
 
+  if (cmd === '0902') {
+    return `490201${[...'VF30DEMO0B0000001'].map((c) => hex(c.charCodeAt(0), 1)).join('')}`;
+  }
   if (cmd === '03') {
     const body = dtcs
       .map((code) => {

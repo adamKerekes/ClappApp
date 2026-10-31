@@ -62,6 +62,8 @@ export class Elm327 {
   private isCan = false;
   private supportedPids = new Set<string>();
   adapterVersion = '';
+  /** Alvázszám (Mode 09), ha az autó megadja; ezzel választjuk szét a naplókat autónként. */
+  vin: string | null = null;
   protocol = '';
 
   private queue: Promise<unknown> = Promise.resolve();
@@ -111,6 +113,23 @@ export class Elm327 {
     this.protocol = await this.sendText('ATDP');
 
     await this.loadSupportedPids(first);
+    this.vin = await this.readVin().catch(() => null);
+  }
+
+  /** Alvázszám kiolvasása (Mode 09, 02). `null`, ha az autó nem adja meg. */
+  async readVin(): Promise<string | null> {
+    const lines = joinFrames(await this.send('0902', 5000));
+    // CAN: 4902 01 + 17 bájt; régebbi protokollokon soronként 4902 + sorszám + 4 bájt.
+    const text = lines
+      .filter((line) => line.startsWith('4902'))
+      .map((line) =>
+        hexToBytes(line.slice(6))
+          .map((b) => String.fromCharCode(b))
+          .join('')
+      )
+      .join('')
+      .replace(/[^A-HJ-NPR-Z0-9]/g, '');
+    return text.length >= 17 ? text.slice(-17) : null;
   }
 
   /** A 0100, 0120, 0140 válaszok bitmaszkjából kiderül, mely PID-eket ismeri az autó. */

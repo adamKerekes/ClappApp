@@ -46,9 +46,9 @@ export function logColumns(targets: LogTarget[], pids: PidDefinition[]): string[
   ];
 }
 
-export function logCsvHeader(targets: LogTarget[], pids: PidDefinition[]): string {
+export function logCsvHeader(targets: LogTarget[], pids: PidDefinition[], vin: string | null): string {
   const comment = targets.map((t) => `${t.ecu.label} ${t.ecu.tx}/${t.ecu.rx}`).join(', ');
-  return `# Clapp napló – ${comment}\n${logColumns(targets, pids).join(';')}\n`;
+  return `# Clapp napló – VIN: ${vin ?? 'ismeretlen'} – ${comment}\n${logColumns(targets, pids).join(';')}\n`;
 }
 
 export function logCsvLine(row: LogRow, startedAt: Date, targets: LogTarget[], pids: PidDefinition[]): string {
@@ -113,11 +113,12 @@ async function logDirectory() {
   return dir;
 }
 
-export async function createLogFile(header: string, time = new Date()): Promise<LogFile> {
+export async function createLogFile(header: string, vin: string | null, time = new Date()): Promise<LogFile> {
   const { File } = await import('expo-file-system');
   const dir = await logDirectory();
   const stamp = time.toISOString().slice(0, 19).replace(/[:T]/g, '-');
-  const file = new File(dir, `clapp-naplo-${stamp}.csv`);
+  // A fájlnévben az alvázszám, így a lista autónként szétválik.
+  const file = new File(dir, `clapp-naplo-${vin ?? 'ismeretlen-auto'}-${stamp}.csv`);
   file.create({ overwrite: true });
   await file.write(header);
   return {
@@ -137,7 +138,7 @@ export async function listLogFiles(): Promise<SavedLog[]> {
     .list()
     .filter((item): item is InstanceType<typeof File> => item instanceof File && item.name.endsWith('.csv'))
     .map((f) => ({ name: f.name, uri: f.uri, size: f.size ?? 0 }))
-    .sort((a, b) => b.name.localeCompare(a.name));
+    .sort((a, b) => b.name.slice(-23).localeCompare(a.name.slice(-23)));
 }
 
 export async function deleteLogFile(uri: string): Promise<void> {
