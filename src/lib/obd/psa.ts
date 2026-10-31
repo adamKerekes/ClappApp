@@ -1,5 +1,4 @@
 import { type Elm327, joinFrames } from './elm327';
-import type { PidDefinition } from './pids';
 
 /**
  * PSA (Peugeot, Citroën) gyári diagnosztika, csak olvasás.
@@ -42,20 +41,14 @@ export type PsaScanResult = {
   zones: PsaZone[];
 };
 
-/** Egy naplósor: időpont, szabványos értékek és a zónák nyers tartalma. */
-export type PsaLogRow = {
-  time: Date;
-  values: Record<string, number | null>;
-  zones: Record<string, string>;
-};
-
-/** Ennyi sor fér a naplóba, utána a legrégebbiek kiesnek (a megosztás mérete miatt). */
-export const MAX_LOG_ROWS = 400;
-
 const hex2 = (n: number) => n.toString(16).toUpperCase().padStart(2, '0');
 
-/** Átállítja az adaptert a vezérlő gyári címére és megnyitja a diagnosztikai munkamenetet. */
-async function openSession(elm: Elm327, ecu: PsaEcu): Promise<string | null> {
+/**
+ * Átállítja az adaptert a vezérlő gyári címére és megnyitja a diagnosztikai munkamenetet.
+ * Visszaadja a sikeres nyitó kérést, vagy `null`-t, ha egyik sem sikerült (a fejléc ekkor
+ * is a gyári címen marad, a hívónak a `closeSession`-t mindig meg kell hívnia).
+ */
+export async function openSession(elm: Elm327, ecu: PsaEcu, preferred: string[] = []): Promise<string | null> {
   await elm.send(`ATSH${ecu.tx}`);
   await elm.send(`ATCRA${ecu.rx}`);
   // A több képkockás válaszokhoz a "folytasd" jelzést is a gyári címre kell küldeni.
@@ -64,26 +57,30 @@ async function openSession(elm: Elm327, ecu: PsaEcu): Promise<string | null> {
   await elm.send('ATFCSD300000').catch(() => {});
   await elm.send('ATFCSM1').catch(() => {});
 
-  // A CAN-es KWP vezérlők a 81-et értik, a régebbiek a 10C0-t.
-  for (const [command, reply] of [
-    ['81', 'C1'],
-    ['10C0', '50C0'],
-  ]) {
+  // A CAN-es KWP vezérlők a 81-et értik, a régebbiek és az UDS-esek a 10C0-t.
+  for (const command of [...preferred, '81', '10C0']) {
     const lines = await elm.send(command, 3000).catch(() => [] as string[]);
-    if (lines.some((line) => line.startsWith(reply))) return command;
+    if (lines.some((line) => line.startsWith(positiveReply(command)))) return command;
   }
   return null;
 }
 
+/** A nyitó kérésre várt pozitív válasz eleje (pl. `10C0` -> `50C0`, `81` -> `C1`). */
+function positiveReply(command: string) {
+  const service = parseInt(command.slice(0, 2), 16) + 0x40;
+  return service.toString(16).toUpperCase() + command.slice(2);
+}
+
 /** Lezárja a munkamenetet és visszaállítja a szabványos OBD fejléceket. */
-async function closeSession(elm: Elm327, session: string | null) {
-  if (session) await elm.send(session === '81' ? '82' : '1081', 1000).catch(() => {});
+export async function closeSession(elm: Elm327, session: string | null) {
+  const close: Record<string, string> = { '81': '82', '10C0': '1081', '1003': '1001' };
+  if (session) await elm.send(close[session] ?? '1081', 1000).catch(() => {});
   for (const command of ['ATFCSM0', 'ATCRA', 'ATSH7DF']) {
     await elm.send(command).catch(() => {});
   }
 }
 
-async function readZone(elm: Elm327, zoneHex: string): Promise<string | null> {
+export async function readZone(elm: Elm327, zoneHex: string): Promise<string | null> {
   const lines = joinFrames(await elm.send(`21${zoneHex}`, 1500).catch(() => [] as string[]));
   const prefix = `61${zoneHex}`;
   const line = lines.find((l) => l.startsWith(prefix));
@@ -118,53 +115,6 @@ export async function scanPsaZones(
   } finally {
     await closeSession(elm, result.session);
   }
-}
-
-/**
- * Napló egy köre: a megadott zónák, utána a szabványos adatok (fordulat, sebesség, hőfokok…),
- * hogy később össze lehessen vetni, melyik zóna mivel együtt mozog.
- */
-export async function readLogRow(
-  elm: Elm327,
-  ecu: PsaEcu,
-  zones: string[],
-  pids: PidDefinition[]
-): Promise<PsaLogRow> {
-  const row: PsaLogRow = { time: new Date(), values: {}, zones: {} };
-  let session: string | null = null;
-  try {
-    session = await openSession(elm, ecu);
-    if (session) {
-      for (const zone of zones) {
-        const data = await readZone(elm, zone);
-        if (data) row.zones[zone] = data;
-      }
-    }
-  } finally {
-    await closeSession(elm, session);
-  }
-  for (const pid of pids) {
-    row.values[pid.pid] = await elm.readPid(pid).catch(() => null);
-  }
-  return row;
-}
-
-/** A napló CSV formában: egy oszlop minden szabványos értéknek és minden zónának. */
-export function formatLogCsv(ecu: PsaEcu, rows: PsaLogRow[], pids: PidDefinition[]): string {
-  const zones = [...new Set(rows.flatMap((r) => Object.keys(r.zones)))].sort();
-  const header = ['ido', ...pids.map((p) => `${p.label} (${p.unit})`), ...zones.map((z) => `21${z}`)];
-  const lines = [
-    `# Clapp PSA napló – ${ecu.label} (${ecu.tx}/${ecu.rx})`,
-    header.join(';'),
-    ...rows.map((r) =>
-      [
-        r.time.toISOString(),
-        ...pids.map((p) => r.values[p.pid]?.toFixed(p.decimals) ?? ''),
-        ...zones.map((z) => r.zones[z] ?? ''),
-      ].join(';')
-    ),
-  ];
-  return lines.join('\n');
 }
 
 /** Szöveges összefoglaló megosztáshoz. */

@@ -21,15 +21,33 @@ import { Elm327 } from '@/lib/obd/elm327';
 import { GAUGES } from '@/lib/obd/gauges';
 import { AFTERTREATMENT_PIDS, LIVE_PIDS, type PidDefinition } from '@/lib/obd/pids';
 import {
-  changedZones,
-  formatLogCsv,
-  formatScan,
-  MAX_LOG_ROWS,
-  PSA_ECUS,
+  createLogFile,
+  deleteLogFile,
+  listLogFiles,
+  logCsvHeader,
+  logCsvLine,
+  type LogTarget,
   readLogRow,
+  type SavedLog,
+  shareLogFile,
+} from '@/lib/obd/log';
+import {
+  commandKey,
+  decodeHit,
+  formatNumber,
+  formatProbe,
+  NEGATIVE_CODES,
+  OBDB_COMMANDS,
+  OBDB_SIGNAL_COUNT,
+  type ObdbProbeResult,
+  probeObdb,
+} from '@/lib/obd/obdb';
+import {
+  changedZones,
+  formatScan,
+  PSA_ECUS,
   scanPsaZones,
   type PsaEcu,
-  type PsaLogRow,
   type PsaScanResult,
 } from '@/lib/obd/psa';
 
@@ -119,7 +137,14 @@ export default function ObdScreen() {
   const [previousScan, setPreviousScan] = useState<PsaScanResult | null>(null);
   const [scanProgress, setScanProgress] = useState<string | null>(null);
   const scanCancelRef = useRef(false);
-  const [logRows, setLogRows] = useState<PsaLogRow[]>([]);
+  const [probe, setProbe] = useState<ObdbProbeResult | null>(null);
+  const [probeProgress, setProbeProgress] = useState<string | null>(null);
+  const probeCancelRef = useRef(false);
+  /** A gyári adatok legutóbbi nyers válaszai (kulcs pl. `6A8.22D400`), a kijelzéshez. */
+  const [factoryRaw, setFactoryRaw] = useState<Record<string, string>>({});
+  const [logCount, setLogCount] = useState(0);
+  const [logName, setLogName] = useState<string | null>(null);
+  const [savedLogs, setSavedLogs] = useState<SavedLog[]>([]);
   const [logging, setLogging] = useState(false);
   const logStopRef = useRef(false);
 
@@ -233,7 +258,6 @@ export default function ObdScreen() {
         () => scanCancelRef.current
       );
       setPreviousScan(scan?.ecu.id === ecu.id ? scan : null);
-      setLogRows([]);
       setScan(result);
     } catch (e) {
       setError(errorMessage(e));
@@ -245,32 +269,92 @@ export default function ObdScreen() {
     }
   };
 
-  /** Vezetés közbeni napló: körönként a válaszoló zónák és a szabványos adatok. */
+  /** Végigpróbálja az OBDb Peugeot 508 lista összes kérését. */
+  const runProbe = async () => {
+    const elm = elmRef.current;
+    if (!elm) return;
+    stopPolling();
+    probeCancelRef.current = false;
+    setProbeProgress('Kapcsolódás…');
+    try {
+      const result = await probeObdb(
+        elm,
+        (done, total) => setProbeProgress(`${done} / ${total}`),
+        () => probeCancelRef.current
+      );
+      setProbe(result);
+      setFactoryRaw(
+        Object.fromEntries(result.groups.flatMap((g) => g.hits.map((h) => [commandKey(h.command), h.data])))
+      );
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setProbeProgress(null);
+      if (elmRef.current === elm && ObdBluetooth?.isConnected()) {
+        poll(elm, [...pids, ...aftertreatmentPids]);
+      }
+    }
+  };
+
+  /** A napló céljai: a beolvasott zónák és a válaszoló OBDb kérések, vezérlőnként. */
+  const logTargets = (): LogTarget[] => {
+    const targets = new Map<string, LogTarget>();
+    const target = (ecu: PsaEcu) => {
+      if (!targets.has(ecu.tx)) targets.set(ecu.tx, { ecu, zones: [], commands: [] });
+      return targets.get(ecu.tx)!;
+    };
+    if (scan?.session && scan.zones.length > 0) {
+      target(scan.ecu).zones.push(...scan.zones.map((z) => z.zone));
+    }
+    for (const group of probe?.groups ?? []) {
+      if (group.hits.length === 0) continue;
+      const t = target(group.ecu);
+      t.commands.push(...group.hits.map((h) => h.command));
+      if (group.session === '1003') t.preferredSession = ['1003'];
+    }
+    return [...targets.values()];
+  };
+
+  const refreshSavedLogs = useCallback(async () => {
+    if (!ObdBluetooth) return;
+    try {
+      setSavedLogs(await listLogFiles());
+    } catch {
+      // Fájlrendszer nélkül (pl. régi build) nincs mentett napló.
+    }
+  }, []);
+
+  /** Vezetés közbeni napló: körönként a gyári adatok és a szabványos értékek, fájlba. */
   const startLogging = async () => {
     const elm = elmRef.current;
-    if (!elm || !scan?.session) return;
+    const targets = logTargets();
+    if (!elm || targets.length === 0) return;
     const allPids = [...pids, ...aftertreatmentPids];
-    const zones = scan.zones.map((z) => z.zone);
     // A szabványos lekérdezés helyett ez a ciklus fut, ugyanazzal az azonosítóval áll le.
     const logId = ++pollIdRef.current;
     const isActive = () => pollIdRef.current === logId;
     logStopRef.current = false;
-    setLogRows([]);
+    setLogCount(0);
     setLogging(true);
     try {
+      const startedAt = new Date();
+      const file = await createLogFile(logCsvHeader(targets, allPids), startedAt);
+      setLogName(file.name);
+      let count = 0;
       while (isActive()) {
-        const row = await readLogRow(elm, scan.ecu, zones, allPids);
+        const row = await readLogRow(elm, targets, allPids);
+        await file.append(logCsvLine(row, startedAt, targets, allPids));
         if (!isActive()) break;
         setValues((prev) => ({ ...prev, ...row.values }));
-        setLogRows((prev) => [...prev, row].slice(-MAX_LOG_ROWS));
+        setFactoryRaw((prev) => ({ ...prev, ...row.raw }));
+        setLogCount(++count);
       }
     } catch (e) {
-      if (!ObdBluetooth?.isConnected()) {
-        setError(errorMessage(e));
-        disconnect();
-      }
+      setError(errorMessage(e));
+      if (!ObdBluetooth?.isConnected()) disconnect();
     } finally {
       setLogging(false);
+      refreshSavedLogs();
       // Csak a kör végén indulhat újra a szabványos lekérdezés, addig a gyári fejléc él.
       if (logStopRef.current && elmRef.current === elm && ObdBluetooth?.isConnected()) {
         poll(elm, allPids);
@@ -284,8 +368,26 @@ export default function ObdScreen() {
     stopPolling();
   };
 
-  const shareLog = () => {
-    if (scan) Share.share({ message: formatLogCsv(scan.ecu, logRows, [...pids, ...aftertreatmentPids]) });
+  const shareLog = (log: SavedLog) => {
+    shareLogFile(log.uri).catch((e) => setError(errorMessage(e)));
+  };
+
+  const removeLog = (log: SavedLog) => {
+    Alert.alert('Napló törlése', log.name, [
+      { text: 'Mégse', style: 'cancel' },
+      {
+        text: 'Törlés',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteLogFile(log.uri).catch((e) => setError(errorMessage(e)));
+          refreshSavedLogs();
+        },
+      },
+    ]);
+  };
+
+  const shareProbe = () => {
+    if (probe) Share.share({ message: formatProbe(probe) });
   };
 
   const shareScan = () => {
@@ -293,6 +395,9 @@ export default function ObdScreen() {
   };
 
   const changed = scan ? changedZones(scan, previousScan) : new Set<string>();
+  const busy = scanProgress !== null || probeProgress !== null || dtcBusy || logging;
+  const targets = status === 'connected' ? logTargets() : [];
+  const probeHits = probe?.groups.flatMap((g) => g.hits) ?? [];
 
   const readDtcs = async () => {
     const elm = elmRef.current;
@@ -343,11 +448,12 @@ export default function ObdScreen() {
 
   useEffect(() => {
     loadDevices();
+    refreshSavedLogs();
     return () => {
       stopPolling();
       ObdBluetooth?.disconnect();
     };
-  }, [loadDevices]);
+  }, [loadDevices, refreshSavedLogs]);
 
   const contentStyle = {
     paddingTop: safeAreaInsets.top + Spacing.four,
@@ -479,7 +585,7 @@ export default function ObdScreen() {
                     key={ecu.id}
                     title={ecu.label}
                     onPress={() => scanPsa(ecu)}
-                    disabled={scanProgress !== null || dtcBusy || logging}
+                    disabled={busy}
                   />
                 ))}
                 {scanProgress !== null && (
@@ -509,30 +615,88 @@ export default function ObdScreen() {
               )}
             </ThemedView>
 
-            {scan?.session && scan.zones.length > 0 && (
+            <ThemedView type="backgroundElement" style={styles.card}>
+              <ThemedText type="smallBold">Ismert gyári adatok (OBDb lista)</ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                Egy közösségi adatbázis {OBDB_SIGNAL_COUNT} Peugeot 508 gyári adatot ír le névvel és
+                mértékegységgel. Nincs autón igazolva, és főleg az újabb motorokhoz készült, ezért ez
+                egyszer végigkérdezi mind a {OBDB_COMMANDS.length} kérést, és megjegyzi, melyikre
+                válaszol a te autód (csak olvas, 1–5 perc, álló autóval, ráadott gyújtással).
+              </ThemedText>
+              <ThemedView type="backgroundElement" style={styles.row}>
+                <Button title="Próba indítása" onPress={runProbe} disabled={busy} />
+                {probeProgress !== null && (
+                  <>
+                    <ActivityIndicator />
+                    <ThemedText type="small">{probeProgress}</ThemedText>
+                    <Button title="Leállítás" onPress={() => (probeCancelRef.current = true)} />
+                  </>
+                )}
+              </ThemedView>
+              {probe?.groups.map((g) => (
+                <ThemedText key={`${g.ecu.tx}${g.sourceSession}`} type="small" themeColor="textSecondary">
+                  {g.ecu.label} ({g.ecu.tx}
+                  {g.sourceSession ? `, ${g.sourceSession}` : ''}): {g.asked} kérés, {g.hits.length} válasz
+                  {Object.entries(g.negative).map(
+                    ([code, n]) => `, ${n}× ${NEGATIVE_CODES[code] ?? `elutasítva (${code})`}`
+                  )}
+                  {g.gaveUp ? ', nem válaszol' : g.silent > 0 ? `, ${g.silent} néma` : ''}
+                </ThemedText>
+              ))}
+              {probeHits.map((hit) => {
+                const data = factoryRaw[commandKey(hit.command)] ?? hit.data;
+                const decoded = decodeHit(hit.command, data);
+                return hit.command.signals.map((signal, i) => (
+                  <ThemedText key={signal.id} type="small">
+                    {signal.name}:{' '}
+                    <ThemedText type="smallBold">
+                      {decoded[i] == null ? '–' : formatNumber(decoded[i]!)} {signal.unit}
+                    </ThemedText>
+                  </ThemedText>
+                ));
+              })}
+              {probe && <Button title="Eredmény megosztása" onPress={shareProbe} />}
+            </ThemedView>
+
+            {targets.length > 0 && (
               <ThemedView type="backgroundElement" style={styles.card}>
                 <ThemedText type="smallBold">Napló vezetés közben</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
-                  Folyamatosan olvassa a fenti zónákat a fordulattal, sebességgel, hőfokokkal együtt.
-                  Egy hosszabb út (vagy egy regenerálás) naplójából visszafejthető, melyik zóna mit
-                  jelent. Utána a Megosztás gombbal küldd el.
+                  Folyamatosan olvassa a gyári adatokat ({targets
+                    .map((t) => `${t.ecu.label}: ${t.zones.length} zóna, ${t.commands.length} ismert kérés`)
+                    .join('; ')}
+                  ) a fordulattal, sebességgel, hőfokokkal együtt, és mindent egy fájlba ment a
+                  telefonon. Egy hosszabb útból (vagy egy regenerálásból) visszafejthető, melyik
+                  adat mit jelent.
                 </ThemedText>
                 <ThemedView type="backgroundElement" style={styles.row}>
                   {logging ? (
                     <Button title="Napló leállítása" onPress={stopLogging} />
                   ) : (
-                    <Button
-                      title="Napló indítása"
-                      onPress={startLogging}
-                      disabled={scanProgress !== null || dtcBusy}
-                    />
+                    <Button title="Napló indítása" onPress={startLogging} disabled={busy} />
                   )}
                   {logging && <ActivityIndicator />}
-                  <ThemedText type="small">{logRows.length} sor</ThemedText>
-                  {!logging && logRows.length > 0 && (
-                    <Button title="Napló megosztása" onPress={shareLog} />
+                  {(logging || logName) && (
+                    <ThemedText type="small">
+                      {logCount} sor{logName ? ` · ${logName}` : ''}
+                    </ThemedText>
                   )}
                 </ThemedView>
+              </ThemedView>
+            )}
+
+            {savedLogs.length > 0 && (
+              <ThemedView type="backgroundElement" style={styles.card}>
+                <ThemedText type="smallBold">Mentett naplók</ThemedText>
+                {savedLogs.map((log) => (
+                  <ThemedView key={log.uri} type="backgroundElement" style={styles.row}>
+                    <ThemedText type="small" style={styles.logName}>
+                      {log.name} ({Math.max(1, Math.round(log.size / 1024))} kB)
+                    </ThemedText>
+                    <Button title="Megosztás" onPress={() => shareLog(log)} disabled={logging && log.name === logName} />
+                    <Button title="Törlés" onPress={() => removeLog(log)} disabled={logging && log.name === logName} />
+                  </ThemedView>
+                ))}
               </ThemedView>
             )}
 
@@ -550,8 +714,8 @@ export default function ObdScreen() {
                 </ThemedText>
               ))}
               <ThemedView type="backgroundElement" style={styles.row}>
-                <Button title="Kiolvasás" onPress={readDtcs} disabled={dtcBusy || scanProgress !== null || logging} />
-                <Button title="Törlés" onPress={clearDtcs} disabled={dtcBusy || scanProgress !== null || logging} />
+                <Button title="Kiolvasás" onPress={readDtcs} disabled={busy} />
+                <Button title="Törlés" onPress={clearDtcs} disabled={busy} />
                 {dtcBusy && <ActivityIndicator />}
               </ThemedView>
             </ThemedView>
@@ -614,5 +778,8 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#E5484D',
+  },
+  logName: {
+    flexBasis: '100%',
   },
 });
