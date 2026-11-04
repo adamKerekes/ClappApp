@@ -6,6 +6,9 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.view.WindowManager
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -151,8 +154,48 @@ class ObdBluetoothModule : Module() {
       closeSocket()
     }
 
+    // Rögzítés közben a képernyő nem kapcsol ki és nem zárolódik magától.
+    Function("setKeepScreenOn") { enabled: Boolean ->
+      val activity = appContext.currentActivity
+      activity?.runOnUiThread {
+        if (enabled) {
+          activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+          activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+      }
+      activity != null
+    }
+
+    // Előtérszolgáltatás (értesítés), hogy a rögzítés háttérben is fusson.
+    Function("startRecordingService") { title: String, text: String ->
+      val context = appContext.reactContext
+      if (context == null) {
+        false
+      } else {
+        val intent = Intent(context, ObdRecordingService::class.java)
+          .putExtra(ObdRecordingService.EXTRA_TITLE, title)
+          .putExtra(ObdRecordingService.EXTRA_TEXT, text)
+        try {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+          } else {
+            context.startService(intent)
+          }
+          true
+        } catch (e: Exception) {
+          false
+        }
+      }
+    }
+
+    Function("stopRecordingService") {
+      stopRecordingService()
+    }
+
     OnDestroy {
       closeSocket()
+      stopRecordingService()
     }
   }
 
@@ -197,6 +240,11 @@ class ObdBluetoothModule : Module() {
       }
     }
     throw ConnectFailedException(lastError)
+  }
+
+  private fun stopRecordingService() {
+    val context = appContext.reactContext ?: return
+    context.stopService(Intent(context, ObdRecordingService::class.java))
   }
 
   private fun closeSocket() {

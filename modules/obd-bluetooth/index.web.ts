@@ -33,11 +33,47 @@ function supportMask(base: number, pids: number[], hasNext: boolean): string {
 
 const SUPPORTED = [0x04, 0x05, 0x0b, 0x0c, 0x0d, 0x0f, 0x10, 0x11, 0x2f, 0x34, 0x3c, 0x3e, 0x42, 0x44, 0x78, 0x7a, 0x7c];
 
-/** Kitalált gyári zónák a PSA olvasáshoz; néhány idővel változik. */
-function zoneData(zone: number, t: number): string | null {
-  if (zone % 7 !== 0 && zone !== 0xc1) return null;
-  if (zone === 0xc1) return `${hex(40 + (t / 20) % 30, 1)}0A1F${hex(t % 255, 1)}`;
-  return `${hex(zone, 1)}${hex(zone * 3, 1)}00${hex((zone * 17 + Math.floor(t / 30)) % 255, 1)}`;
+/** Bájtok hexában, a megadott helyeken a megadott értékekkel (2–3 bájtos értékek nagy végűek). */
+function bytesHex(length: number, fields: [offset: number, size: number, value: number][]): string {
+  const bytes = new Array<number>(length).fill(0x11);
+  for (const [offset, size, value] of fields) {
+    const v = Math.max(0, Math.round(value));
+    for (let i = 0; i < size; i++) bytes[offset + i] = (v >> (8 * (size - 1 - i))) & 0xff;
+  }
+  return bytes.map((b) => hex(b, 1)).join('');
+}
+
+/**
+ * Kitalált gyári zónák a PSA motorvezérlőhöz, a valódi (5008-as) kiosztással:
+ * 21CA töltőnyomás, 21CB korom / DPF / kipufogó / km, 21DC számláló stb.
+ */
+function zoneData(zone: number, t: number, s: { rpm: number; speed: number; coolant: number }): string | null {
+  const load = Math.max(0, s.speed / 80);
+  const boostReq = 1000 + 1500 * load;
+  switch (zone) {
+    case 0x82:
+      return `010C090B0C${[...'817062696   '].map((c) => hex(c.charCodeAt(0), 1)).join('')}`;
+    case 0xca:
+      return bytesHex(42, [
+        [0, 2, s.rpm], [2, 1, s.speed], [6, 2, boostReq], [8, 2, boostReq + 20 * Math.sin(t)],
+        [20, 2, 15], [37, 2, 350 + 600 * load], [39, 2, 400 + 500 * load],
+      ]);
+    case 0xcb:
+      return bytesHex(37, [
+        [0, 2, s.rpm], [2, 1, s.speed], [4, 1, 60 + 40 * load], [9, 2, 1972 + t / 20], [16, 1, 5 + 60 * load],
+        [23, 2, 220 + 180 * load], [25, 2, 221 + 180 * load], [27, 1, t > 60 ? 16 : 0], [28, 2, 631 + t / 90],
+        [32, 1, s.speed > 30 ? 100 : 0], [33, 1, 62], [34, 3, 103752 + t / 720],
+      ]);
+    case 0xc7:
+      return bytesHex(12, [[0, 2, s.rpm], [2, 1, s.speed], [7, 1, s.speed < 3 ? 0xa6 : load > 0.6 ? 0xb0 : 0xa0], [8, 1, s.coolant + 50]]);
+    case 0xcc:
+      return bytesHex(24, [[3, 1, 0xa0], [4, 2, 400 + 1800 * load], [6, 2, 200 + 900 * load]]);
+    case 0xcd:
+      return bytesHex(12, [[3, 1, s.coolant + 50], [10, 1, 20 + 40 * load]]);
+    case 0xdc:
+      return bytesHex(21, [[18, 3, 856452 + t / 4]]);
+  }
+  return null;
 }
 
 let connected = false;
@@ -70,7 +106,7 @@ function respond(command: string): string {
     if (cmd === '3E' || cmd === '82' || cmd === '1081') return 'OK';
     if (cmd.startsWith('21')) {
       const zone = parseInt(cmd.slice(2), 16);
-      const data = zoneData(zone, t);
+      const data = zoneData(zone, t, { rpm, speed, coolant });
       return data ? `61${cmd.slice(2)}${data}` : '7F2112';
     }
     return 'NO DATA';
@@ -140,4 +176,7 @@ export const ObdBluetooth = {
   disconnect() {
     connected = false;
   },
+  setKeepScreenOn: (_enabled: boolean) => true,
+  startRecordingService: (_title: string, _text: string) => true,
+  stopRecordingService() {},
 };

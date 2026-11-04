@@ -121,7 +121,7 @@ npx expo-doctor           # függőségek és konfiguráció ellenőrzése
 
 ## OBD-II adapter (Bluetooth)
 
-Az app egyetlen képernyője, az **OBD** képernyő egy olcsó ELM327 Bluetooth adapterről olvas élő adatokat (fordulatszám, sebesség, hűtővíz, terhelés, akkufeszültség stb.) és hibakódokat. Csak **Androidon** működik, klasszikus Bluetooth (SPP) adapterrel, és **development build** kell hozzá: az Expo Go-ban nincs benne a Bluetooth modul.
+Az app **OBD** képernyője egy olcsó ELM327 Bluetooth adapterről olvas élő adatokat (fordulatszám, sebesség, hűtővíz, terhelés, akkufeszültség, gyári töltőnyomás, korom- és DPF-jelöltek stb.). Mellette a **Mentések** és a **Hibakódok** külön menüpont. Csak **Androidon** működik, klasszikus Bluetooth (SPP) adapterrel, és **development build** kell hozzá: az Expo Go-ban nincs benne a Bluetooth modul.
 
 A natív rész a [`modules/obd-bluetooth`](modules/obd-bluetooth) helyi Expo modulban van, az ELM327 protokoll a [`src/lib/obd`](src/lib/obd) mappában.
 
@@ -167,20 +167,21 @@ Egyszer kell megcsinálni, és csak akkor újra, ha natív kód vagy natív csom
 
 Ha az adapter nem jelenik meg a párosítható eszközök között, valószínűleg Bluetooth Low Energy (BLE) típusú, amit ez a verzió még nem kezel.
 
-### Gyári adatok azonosítása (Peugeot / Citroën, kísérleti)
+### Élő adatok és rögzítés
 
-Mind csak olvas, a vezérlőbe semmit nem ír.
+1. Csatlakozás után válaszd ki, melyik autóra csatlakoztál (**Peugeot 5008** vagy **Peugeot 508 SW**). Az app a motorvezérlő szoftver-azonosítójából (21 82 zóna) fel is ismeri, és azt jelöli meg. A választás alapján olvassa a gyári adatokat, és ehhez az autóhoz írja a magyarázatokat.
+2. A paraméterek soronként, egy-egy dobozban jelennek meg, a doboz hátterében az utolsó egy perc grafikonjával (zöld sáv: normál tartomány). Felül az **azonosított**, alatta a **kérdéses** (narancs jelölés), legalul a **nem azonosított** (szürke, szaggatott) gyári adatok. A paraméterek leírása a `src/lib/obd/params.ts` fájlban van, a projekt tudásbázisa alapján.
+3. Egy dobozra koppintva jön a részletes nézet: a teljes futás grafikonja, min / átlag / max, a paraméter leírása, az optimális érték és hogy mit jelent a kiválasztott autón.
+4. A **● Rögzítés** gomb mindig a képernyő tetején van. Rögzítés közben a képernyő nem kapcsol ki, és háttérben is fut tovább (értesítés jelzi). A fájl a **Mentések** menüben jelenik meg, onnan megosztható. A fájl nevében az autó szerepel (`clapp-naplo-5008-….csv`).
+5. Mintavétel: a gyorsan változó értékek (fordulat, sebesség, nyomás, légtömeg, lambda) és a 21CA, 21CB gyári zónák minden körben, a lassúak felváltva; egy kör kb. 1–1,5 mp.
 
-1. **Ismert gyári adatok (OBDb lista):** az [OBDb Peugeot-508](https://github.com/OBDb/Peugeot-508) közösségi lista 353 kérését (367 jel névvel és mértékegységgel) egyszer végigkérdezi, és megjegyzi, melyikre válaszol az autó. A válaszolók névvel jelennek meg. A lista nincs autón igazolva, és főleg 2014 utáni motorokhoz készült.
-2. **Gyári adatok (zónák):** a motorvezérlő 21xx zónáit nyersen olvassa ki.
-3. **Napló vezetés közben:** az előző kettő válaszoló adatait és a szabványos értékeket körönként egy CSV fájlba menti a telefonon (`naplok` mappa, hosszkorlát nélkül). A **Mentett naplók** listából a fájl megosztható. A fájl nevében és fejlécében az autó alvázszáma (VIN) is szerepel, ha az autó megadja, így több autó naplói nem keverednek.
-4. **Elemzés a gépen:**
-   ```bash
-   python3 scripts/analyze-log.py clapp-naplo-2026-....csv --out jelentes.md
-   ```
-   Kiírja, melyik bájt mozog együtt melyik ismert értékkel (és milyen képlettel), és alak szerint besorolja a többit (számláló, lenullázódó számláló, kapcsoló, állandó).
+Elemzés a gépen (a CSV formátuma a régi naplóval kompatibilis):
 
-Javasolt menet egy naplóhoz: hidegindítás után indítsd a naplót, 1 perc alapjárat, 3–4 gázfröccs állva (2000, 3000 1/min), utána városi szakasz, végül legalább 15–20 perc egyenletes országúti vagy autópályás út. Ha regenerálás közben is fut a napló, abból látszanak a DPF adatok.
+```bash
+python3 scripts/analyze-log.py clapp-naplo-5008-....csv --out jelentes.md
+```
+
+Csak olvas, a vezérlőbe semmit nem ír (kivéve a Hibakódok menüben a kérésre végzett hibakódtörlést).
 
 ## Mappaszerkezet
 
