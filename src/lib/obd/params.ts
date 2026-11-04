@@ -79,7 +79,8 @@ export const PARAMS: Param[] = [
     status: 'identified',
     source: { kind: 'pid', pid: '0C' },
     range: [0, 4500],
-    ok: [700, 3000],
+    // A 0 is normál: start-stop leállás (5008) vagy álló motor.
+    ok: [0, 3500],
     description:
       'A motor főtengelyének percenkénti fordulata (szabványos OBD, 010C). A gyári 21C7–21CE zónák 0–1. bájtja ugyanezt adja.',
     optimal:

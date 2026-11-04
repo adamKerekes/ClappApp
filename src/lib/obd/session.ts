@@ -278,6 +278,13 @@ class ObdSession {
     this.set({ car, factory: 'pending', paramIds: this.visibleParams(car, 'pending') });
   }
 
+  /** Autóváltás: újra megjelenik a választó, a gyári adatok olvasása addig szünetel. */
+  clearCar() {
+    if (this.snap.status !== 'connected' || this.snap.recording) return;
+    this.factorySession = null;
+    this.set({ car: null, factory: 'off', paramIds: this.visibleParams(null, 'off') });
+  }
+
   async disconnect(error: string | null = null) {
     this.loopId++;
     await this.stopRecording();

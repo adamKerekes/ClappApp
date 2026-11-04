@@ -7,7 +7,7 @@ import { Spacing } from '@/constants/theme';
 import { formatValue, type Param, STATUS_LABELS } from '@/lib/obd/params';
 import { useSeries } from '@/lib/obd/session';
 
-import { Chart } from './chart';
+import { BAD_COLOR, Chart } from './chart';
 
 /** A háttérgrafikon mindig az utolsó egy percet mutatja. */
 export const TILE_WINDOW_MS = 60_000;
@@ -18,7 +18,7 @@ export const STATUS_COLORS = {
   unidentified: '#8B8D98',
 } as const;
 
-export const WARN_COLOR = '#F59E0B';
+export const WARN_COLOR = BAD_COLOR;
 
 /** Egy paraméter doboza: megnevezés és érték, a háttérben az utolsó perc grafikonja. */
 export function ParamTile({ param, value }: { param: Param; value: number | null | undefined }) {

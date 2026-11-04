@@ -1,1 +1,4 @@
-export { useColorScheme } from 'react-native';
+/** Az app mindig sötét módban fut (autóban, éjjel is jól olvasható). */
+export function useColorScheme(): 'dark' {
+  return 'dark';
+}

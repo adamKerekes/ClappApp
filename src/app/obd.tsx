@@ -3,13 +3,14 @@ import { useEffect } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CarPicker } from '@/components/obd/car-picker';
 import { ParamTile, STATUS_COLORS } from '@/components/obd/param-tile';
 import { Button, ScreenHeader } from '@/components/obd/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { CAR_IDS, CARS } from '@/lib/obd/cars';
+import { CARS } from '@/lib/obd/cars';
 import { STATUS_LABELS, STATUS_ORDER } from '@/lib/obd/params';
 import { obd, paramList, useObd } from '@/lib/obd/session';
 
@@ -138,6 +139,14 @@ export default function ObdScreen() {
                   </View>
                   <Button title="Leválasztás" onPress={() => obd.disconnect()} />
                 </View>
+                {car && (
+                  <View style={styles.row}>
+                    <ThemedText type="smallBold" style={styles.flex}>
+                      {CARS[car].label}
+                    </ThemedText>
+                    <Button title="Autó váltása" onPress={() => obd.clearCar()} disabled={recording !== null} />
+                  </View>
+                )}
                 {busy && (
                   <View style={styles.row}>
                     <ActivityIndicator />
@@ -146,46 +155,16 @@ export default function ObdScreen() {
                 )}
               </ThemedView>
 
-              <ThemedView type="backgroundElement" style={styles.card}>
-                <ThemedText type="smallBold">{car ? 'Autó' : 'Melyik autóra csatlakoztál?'}</ThemedText>
-                {!car && (
-                  <ThemedText type="small" themeColor="textSecondary">
-                    A választás alapján olvassa a gyári adatokat, és ehhez az autóhoz értelmezi az értékeket.
-                    {detectedCar ? ` A motorvezérlő szoftvere alapján ez a(z) ${CARS[detectedCar].label}.` : ''}
-                  </ThemedText>
-                )}
-                <View style={styles.carRow}>
-                  {CAR_IDS.map((id) => {
-                    const selected = car === id;
-                    return (
-                      <Pressable
-                        key={id}
-                        style={({ pressed }) => [styles.flex, pressed && styles.pressed]}
-                        disabled={recording !== null}
-                        onPress={() => obd.selectCar(id)}>
-                        <ThemedView
-                          type={selected ? 'backgroundSelected' : 'background'}
-                          style={[styles.carButton, (selected || (!car && detectedCar === id)) && styles.carSelected]}>
-                          <ThemedText type="smallBold">{CARS[id].label}</ThemedText>
-                          <ThemedText type="small" themeColor="textSecondary">
-                            {selected ? 'kiválasztva' : !car && detectedCar === id ? 'felismerve, koppints' : CARS[id].note}
-                          </ThemedText>
-                        </ThemedView>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                {car && detectedCar && detectedCar !== car && (
-                  <ThemedText type="small" style={styles.warnText}>
-                    A motorvezérlő szoftvere alapján ez inkább a(z) {CARS[detectedCar].label}.
-                  </ThemedText>
-                )}
-                {car && factory === 'unavailable' && (
-                  <ThemedText type="small" style={styles.warnText}>
-                    A motorvezérlő gyári adatai nem érhetők el, csak a szabványos értékek látszanak és rögzülnek.
-                  </ThemedText>
-                )}
-              </ThemedView>
+              {car && detectedCar && detectedCar !== car && (
+                <ThemedText type="small" style={styles.warnText}>
+                  A motorvezérlő szoftvere alapján ez inkább a(z) {CARS[detectedCar].label}.
+                </ThemedText>
+              )}
+              {car && factory === 'unavailable' && (
+                <ThemedText type="small" style={styles.warnText}>
+                  A motorvezérlő gyári adatai nem érhetők el, csak a szabványos értékek látszanak és rögzülnek.
+                </ThemedText>
+              )}
 
               {STATUS_ORDER.map((statusKey) => {
                 const group = params.filter((p) => p.status === statusKey);
@@ -219,6 +198,7 @@ export default function ObdScreen() {
           )}
         </View>
       </ScrollView>
+      <CarPicker />
     </View>
   );
 }
@@ -254,20 +234,6 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
-  },
-  carRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  carButton: {
-    padding: Spacing.three,
-    borderRadius: Spacing.three,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    gap: Spacing.half,
-  },
-  carSelected: {
-    borderColor: '#3c87f7',
   },
   section: {
     gap: Spacing.two,

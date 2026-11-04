@@ -4,8 +4,13 @@ import Svg, { Line, Path, Rect } from 'react-native-svg';
 
 import type { Series } from '@/lib/obd/session';
 
-export const CHART_COLOR = '#3c87f7';
-export const OK_BAND_COLOR = '#30A46C';
+/** Normál (optimális tartományon belüli) érték színe. */
+export const GOOD_COLOR = '#30A46C';
+/** Az optimálistól eltérő érték színe. */
+export const BAD_COLOR = '#E5484D';
+export const OK_BAND_COLOR = GOOD_COLOR;
+
+export const isGood = (value: number, ok?: [number, number]) => !ok || (value >= ok[0] && value <= ok[1]);
 
 type Props = {
   series: Series;
@@ -87,16 +92,36 @@ export function Chart({ series, range, ok, from, to, style, subtle }: Props) {
     return h - ((clamped - min) / (max - min)) * h;
   };
 
-  let line = '';
-  for (let i = 0; i < data.t.length; i++) {
-    line += `${i === 0 ? 'M' : 'L'}${x(data.t[i]).toFixed(1)},${y(data.v[i]).toFixed(1)}`;
+  // A vonal szakaszokra bomlik: zöld, ahol az érték normál, piros, ahol eltér az optimálistól.
+  // Egy szakasz színét a két végpont közti átlag dönti el.
+  type Run = { good: boolean; line: string; area: string };
+  const runs: Run[] = [];
+  const pt = (i: number) => `${x(data.t[i]).toFixed(1)},${y(data.v[i]).toFixed(1)}`;
+  const close = (run: Run, firstX: number, lastX: number) => {
+    run.area = `${run.line}L${lastX.toFixed(1)},${h}L${firstX.toFixed(1)},${h}Z`;
+  };
+  let current: Run | null = null;
+  let runStartX = 0;
+  for (let i = 1; i < data.t.length; i++) {
+    const good = isGood((data.v[i - 1] + data.v[i]) / 2, ok);
+    if (!current || current.good !== good) {
+      if (current) close(current, runStartX, x(data.t[i - 1]));
+      current = { good, line: `M${pt(i - 1)}`, area: '' };
+      runs.push(current);
+      runStartX = x(data.t[i - 1]);
+    }
+    current.line += `L${pt(i)}`;
   }
+  if (current) close(current, runStartX, x(data.t[data.t.length - 1]));
   // Egyetlen pontnál egy rövid vízszintes vonal.
-  if (data.t.length === 1) line += `L${(x(data.t[0]) + 2).toFixed(1)},${y(data.v[0]).toFixed(1)}`;
-  const area =
-    data.t.length > 0
-      ? `${line}L${x(data.t[data.t.length - 1]).toFixed(1)},${h}L${x(data.t[0]).toFixed(1)},${h}Z`
-      : '';
+  if (data.t.length === 1) {
+    const p0 = pt(0);
+    runs.push({
+      good: isGood(data.v[0], ok),
+      line: `M${p0}L${(x(data.t[0]) + 2).toFixed(1)},${y(data.v[0]).toFixed(1)}`,
+      area: '',
+    });
+  }
 
   const okTop = ok ? y(ok[1]) : 0;
   const okBottom = ok ? y(ok[0]) : 0;
@@ -117,17 +142,22 @@ export function Chart({ series, range, ok, from, to, style, subtle }: Props) {
               <Line x1={0} y1={h - 0.5} x2={w} y2={h - 0.5} stroke="#888" strokeOpacity={0.3} strokeWidth={1} />
             </>
           )}
-          {area !== '' && <Path d={area} fill={CHART_COLOR} opacity={subtle ? 0.1 : 0.15} />}
-          {line !== '' && (
+          {runs.map((run, i) =>
+            run.area !== '' ? (
+              <Path key={`a${i}`} d={run.area} fill={run.good ? GOOD_COLOR : BAD_COLOR} opacity={subtle ? 0.12 : 0.18} />
+            ) : null
+          )}
+          {runs.map((run, i) => (
             <Path
-              d={line}
-              stroke={CHART_COLOR}
-              strokeOpacity={subtle ? 0.55 : 1}
+              key={`l${i}`}
+              d={run.line}
+              stroke={run.good ? GOOD_COLOR : BAD_COLOR}
+              strokeOpacity={subtle ? 0.75 : 1}
               strokeWidth={subtle ? 1.5 : 2}
               fill="none"
               strokeLinejoin="round"
             />
-          )}
+          ))}
         </Svg>
       )}
     </View>
