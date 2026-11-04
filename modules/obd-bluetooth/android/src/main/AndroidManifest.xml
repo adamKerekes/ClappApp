@@ -5,4 +5,17 @@
   <!-- Android 12+: párosított eszközök listázása és csatlakozás -->
   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
   <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+
+  <!-- Rögzítés a háttérben: előtérszolgáltatás értesítéssel, és ébren tartott processzor -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+  <application>
+    <service
+      android:name="expo.modules.obdbluetooth.ObdRecordingService"
+      android:exported="false"
+      android:foregroundServiceType="connectedDevice" />
+  </application>
 </manifest>
