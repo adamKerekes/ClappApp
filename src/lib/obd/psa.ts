@@ -171,3 +171,102 @@ export function changedZones(scan: PsaScanResult, previous?: PsaScanResult | nul
   }
   return changed;
 }
+
+// --- Gyári hibakódok -------------------------------------------------------------------------
+
+export type PsaDtc = {
+  /** Pl. `P1445`. */
+  code: string;
+  /** A státuszbájt hexában, ahogy a vezérlő küldte. */
+  status: string;
+  /** Aktív (most is fennáll), tárolt (korábban volt), vagy nem eldönthető. */
+  state: 'active' | 'stored' | 'intermittent' | 'unknown';
+  /** Kérte-e a vezérlő a hibalámpát. */
+  lamp: boolean;
+};
+
+export type PsaDtcResult = {
+  ecu: PsaEcu;
+  /** A sikeres olvasó kérés (`17FF00`, `1800FF00` vagy `1902FF`), vagy `null`. */
+  request: string | null;
+  dtcs: PsaDtc[];
+};
+
+const DTC_SYSTEMS = ['P', 'C', 'B', 'U'];
+
+function dtcText(high: number, low: number): string {
+  const rest = ((high & 0x0f) << 8) | low;
+  return `${DTC_SYSTEMS[high >> 6]}${(high >> 4) & 0x03}${rest.toString(16).toUpperCase().padStart(3, '0')}`;
+}
+
+/** KWP2000 (ISO 14230-3) státuszbájt: 5–6. bit a tárolási állapot, 7. bit a hibalámpa. */
+function kwpState(status: number): PsaDtc['state'] {
+  switch ((status >> 5) & 0x03) {
+    case 0x03:
+      return 'active';
+    case 0x02:
+      return 'intermittent';
+    case 0x01:
+      return 'stored';
+    default:
+      return 'unknown';
+  }
+}
+
+/**
+ * A vezérlő gyári hibakódjainak kiolvasása, csak olvasás (törlést nem küld). Előbb a
+ * PSA KWP2000 kérését (`17FF00`) próbálja, utána a szabványos KWP (`1800FF00`) és az UDS
+ * (`1902FF`) változatot. A szabványos OBD címre a végén mindig visszaáll.
+ */
+export async function readPsaDtcs(elm: Elm327, ecu: PsaEcu): Promise<PsaDtcResult> {
+  const result: PsaDtcResult = { ecu, request: null, dtcs: [] };
+  let session: string | null = null;
+  try {
+    session = await openSession(elm, ecu);
+    if (!session) return result;
+    const requests: { command: string; reply: string; skip: number; size: number; uds: boolean }[] = [
+      // 57 <db> [hi lo státusz]…
+      { command: '17FF00', reply: '57', skip: 1, size: 3, uds: false },
+      // 58 <db> [hi lo státusz]…
+      { command: '1800FF00', reply: '58', skip: 1, size: 3, uds: false },
+      // 59 02 <maszk> [hi mid lo státusz]…
+      { command: '1902FF', reply: '5902', skip: 1, size: 4, uds: true },
+    ];
+    for (const r of requests) {
+      const lines = joinFrames(await elm.send(r.command, 3000).catch(() => [] as string[]));
+      const line = lines.find((l) => l.startsWith(r.reply));
+      if (!line) continue;
+      result.request = r.command;
+      const bytes: number[] = [];
+      const body = line.slice(r.reply.length);
+      for (let i = 0; i + 1 < body.length; i += 2) bytes.push(parseInt(body.slice(i, i + 2), 16));
+      const seen = new Set<string>();
+      for (let i = r.skip; i + r.size <= bytes.length; i += r.size) {
+        const [high, low] = bytes.slice(i, i + 2);
+        const status = bytes[i + r.size - 1];
+        if (high === 0 && low === 0) continue;
+        const code = dtcText(high, low);
+        if (seen.has(code)) continue;
+        seen.add(code);
+        result.dtcs.push({
+          code,
+          status: status.toString(16).toUpperCase().padStart(2, '0'),
+          // UDS: 0. bit = most is hibás, 3. bit = megerősített (tárolt).
+          state: r.uds ? (status & 0x01 ? 'active' : status & 0x08 ? 'stored' : 'unknown') : kwpState(status),
+          lamp: (status & 0x80) !== 0,
+        });
+      }
+      break;
+    }
+    return result;
+  } finally {
+    await closeSession(elm, session);
+  }
+}
+
+export const DTC_STATE_LABELS: Record<PsaDtc['state'], string> = {
+  active: 'aktív',
+  stored: 'tárolt',
+  intermittent: 'időszakos',
+  unknown: 'ismeretlen állapot',
+};

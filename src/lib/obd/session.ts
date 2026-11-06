@@ -5,10 +5,19 @@ import { ObdBluetooth, type PairedDevice } from '../../../modules/obd-bluetooth'
 
 import { type CarId, CARS, detectCar } from './cars';
 import { Elm327 } from './elm327';
-import { createLogFile, deleteLogFile, type LogFile } from './log';
+import { createLogFile, deleteLogFile, type LogFile, writeTextFile } from './log';
 import { PARAMS, type Param, type ZoneId } from './params';
 import { AFTERTREATMENT_PIDS, LIVE_PIDS, type PidDefinition } from './pids';
-import { closeSession, openSession, type PsaEcu, readZone, readZoneChecked } from './psa';
+import {
+  closeSession,
+  DTC_STATE_LABELS,
+  openSession,
+  type PsaDtc,
+  type PsaEcu,
+  readPsaDtcs,
+  readZone,
+  readZoneChecked,
+} from './psa';
 
 /**
  * Az OBD kapcsolat és az adatgyűjtés egy helyen, a képernyőktől függetlenül.
@@ -17,9 +26,12 @@ import { closeSession, openSession, type PsaEcu, readZone, readZoneChecked } fro
  * grafikonok előzményét, és ha fut a rögzítés, ugyanez a ciklus írja a sorokat a fájlba.
  * Így a képernyők között lapozva (részletes nézet, mentések) és háttérben is megy tovább.
  *
- * Sűrűbb mintavétel: a gyorsan változó értékeket (fordulat, sebesség, nyomás…) minden
- * körben, a lassúakat (hőfokok, feszültség) felváltva kérdezzük. A gyári munkamenetet nem
- * zárjuk le körönként, csak a fejlécet váltjuk, ezért egy kör kb. 1–1,5 mp (korábban 5–6).
+ * Sűrűbb mintavétel: a gyorsan változó értékeket (fordulat, sebesség, légtömeg) minden
+ * körben, a lassúakat (hőfokok, feszültség) felváltva, körönként egyet kérdezzük. Ha a gyári
+ * zónák jönnek, a szabványos terhelés, szívócsőnyomás, fojtás és lambda is a lassúak közé
+ * kerül, mert a 21CA / 21CB ugyanezt (pontosabban) minden körben adja. A gyári munkamenetet
+ * nem zárjuk le körönként, csak a fejlécet és a válaszcímet váltjuk. Egy kör így kb.
+ * 1,3–1,6 mp (2026-11-06 előtt 1,5–2,1 mp, eredetileg 5–6).
  */
 
 export type Status = 'idle' | 'connecting' | 'connected';
@@ -51,7 +63,13 @@ export type Snapshot = {
   recording: Recording | null;
   /** Hibakód-olvasás és hasonló kizárólagos művelet fut (a gyűjtés addig szünetel). */
   busy: string | null;
+  /** Szabványos OBD hibakódok (Mode 03). */
   dtcs: string[] | null;
+  /** A motorvezérlő (6A8) gyári hibakódjai; `null`, ha még nem olvastuk, vagy nem válaszolt. */
+  psaDtcs: PsaDtc[] | null;
+  /** Az utolsó kiolvasás ideje és mentett fájlja. */
+  dtcTime: number | null;
+  dtcFile: { name: string; uri: string } | null;
   version: number;
 };
 
@@ -66,8 +84,10 @@ const ALL_ZONES: ZoneId[] = [...ZONES_EVERY_ROUND, ...ZONES_ROTATING];
 
 /** Gyorsan változó szabványos értékek: minden körben. */
 const FAST_PARAMS = new Set(['rpm', 'speed', 'load', 'map', 'maf', 'throttle', 'lambda']);
+/** Gyári zónákkal elég ennyi: a többit a 21CA / 21CB minden körben adja. */
+const FAST_PARAMS_WITH_ZONES = new Set(['rpm', 'speed', 'maf']);
 /** Ennyi lassú értéket olvasunk körönként (felváltva). */
-const SLOW_PER_ROUND = 2;
+const SLOW_PER_ROUND = 1;
 
 /** Ennyi ms-onként frissül legfeljebb a képernyő. */
 const EMIT_INTERVAL_MS = 300;
@@ -108,11 +128,17 @@ type RecordingState = Recording & {
   file: LogFile;
   columns: string[];
   /** Melyik oszlopba mi kerül: paraméter vagy nyers zóna. */
-  cells: ({ kind: 'param'; id: string; decimals: number } | { kind: 'zone'; zone: ZoneId })[];
+  cells: ({ kind: 'param'; id: string; decimals: number } | { kind: 'zone'; zone: ZoneId } | { kind: 'dtc' })[];
   writes: Promise<void>;
 };
 
-type Row = { time: number; values: Record<string, number | null>; raw: Partial<Record<ZoneId, string>> };
+type Row = {
+  time: number;
+  values: Record<string, number | null>;
+  raw: Partial<Record<ZoneId, string>>;
+  /** Hibakód-kiolvasás eredménye (csak abban a sorban, amikor volt). */
+  dtc?: string;
+};
 
 class ObdSession {
   private snap: Snapshot = {
@@ -130,6 +156,9 @@ class ObdSession {
     recording: null,
     busy: null,
     dtcs: null,
+    psaDtcs: null,
+    dtcTime: null,
+    dtcFile: null,
     version: 0,
   };
   private listeners = new Set<() => void>();
@@ -218,6 +247,9 @@ class ObdSession {
       info: 'Csatlakozás az adapterhez…',
       values: {},
       dtcs: null,
+      psaDtcs: null,
+      dtcTime: null,
+      dtcFile: null,
       car: null,
       detectedCar: null,
       factory: 'off',
@@ -341,8 +373,9 @@ class ObdSession {
     const row: Row = { time: Date.now(), values: {}, raw: {} };
     const ids = this.snap.paramIds;
 
-    const fast = ids.filter((id) => FAST_PARAMS.has(id) && this.pids.has(id));
-    const slow = ids.filter((id) => !FAST_PARAMS.has(id) && (this.pids.has(id) || id === 'battery'));
+    const fastSet = this.snap.factory === 'ok' ? FAST_PARAMS_WITH_ZONES : FAST_PARAMS;
+    const fast = ids.filter((id) => fastSet.has(id) && this.pids.has(id));
+    const slow = ids.filter((id) => !fastSet.has(id) && (this.pids.has(id) || id === 'battery'));
     const slowNow: string[] = [];
     for (let i = 0; i < Math.min(SLOW_PER_ROUND, slow.length); i++) {
       slowNow.push(slow[this.slowIndex++ % slow.length]);
@@ -392,10 +425,11 @@ class ObdSession {
     let gotAny = false;
     try {
       if (this.factorySession) {
-        // A munkamenet nyitva maradt, elég a fejlécet visszaállítani a gyári címre.
+        // A munkamenet nyitva maradt, elég a fejlécet és a válaszcímet visszaállítani. A
+        // folytatásjelzés (ATFCSM1, ATFCSH) beállítva marad: a körben olvasott szabványos
+        // PID-ek egy képkockásak, azokhoz nem kell.
         await elm.send(`ATSH${ENGINE.tx}`);
         await elm.send(`ATCRA${ENGINE.rx}`);
-        await elm.send('ATFCSM1').catch(() => {});
       } else {
         this.factorySession = await openSession(elm, ENGINE);
       }
@@ -421,7 +455,7 @@ class ObdSession {
       }
     } finally {
       // Vissza a szabványos OBD címre (a munkamenet nyitva marad).
-      for (const command of ['ATFCSM0', 'ATCRA', 'ATSH7DF']) {
+      for (const command of ['ATCRA', 'ATSH7DF']) {
         await elm.send(command).catch(() => {});
       }
     }
@@ -503,6 +537,8 @@ class ObdSession {
         });
       }
     }
+    // Csak abban a sorban van értéke, amikor rögzítés közben hibakódot olvastak ki.
+    add('Hibakódok [03 + 6A8]', { kind: 'dtc' });
 
     const startedAt = new Date();
     const header =
@@ -543,6 +579,7 @@ class ObdSession {
     if (!r || row.time < r.startedAt) return;
     const cells = r.cells.map((cell) => {
       if (cell.kind === 'zone') return row.raw[cell.zone] ?? '';
+      if (cell.kind === 'dtc') return row.dtc ?? '';
       const value = row.values[cell.id];
       return value == null ? '' : value.toFixed(cell.decimals);
     });
@@ -599,17 +636,64 @@ class ObdSession {
     }
   }
 
+  /** Szabványos és gyári (6A8) hibakódok egy menetben. A gyári kódokhoz törlést nem küldünk. */
+  private async readAllDtcs(elm: Elm327) {
+    const obdCodes = await elm.readDtcs();
+    const psa = await readPsaDtcs(elm, ENGINE).catch(() => null);
+    return { obdCodes, psaCodes: psa?.request ? psa.dtcs : null, psaRequest: psa?.request ?? null };
+  }
+
   async readDtcs() {
-    const dtcs = await this.exclusive('Hibakódok olvasása…', (elm) => elm.readDtcs());
-    if (dtcs) this.set({ dtcs });
+    const result = await this.exclusive('Hibakódok olvasása…', (elm) => this.readAllDtcs(elm));
+    if (result) await this.saveDtcs(result, 'kiolvasás');
   }
 
   async clearDtcs() {
-    const dtcs = await this.exclusive('Hibakódok törlése…', async (elm) => {
+    const result = await this.exclusive('Hibakódok törlése…', async (elm) => {
       await elm.clearDtcs();
-      return elm.readDtcs();
+      return this.readAllDtcs(elm);
     });
-    if (dtcs) this.set({ dtcs });
+    if (result) await this.saveDtcs(result, 'törlés után');
+  }
+
+  /** Megjeleníti, külön szövegfájlba menti, és ha fut a rögzítés, a naplóba is beírja. */
+  private async saveDtcs(
+    result: { obdCodes: string[]; psaCodes: PsaDtc[] | null; psaRequest: string | null },
+    reason: string
+  ) {
+    const time = new Date();
+    const { obdCodes, psaCodes, psaRequest } = result;
+    this.set({ dtcs: obdCodes, psaDtcs: psaCodes, dtcTime: time.getTime() });
+
+    const psaText = (d: PsaDtc) => `${d.code} (${DTC_STATE_LABELS[d.state]}, státusz 0x${d.status}${d.lamp ? ', hibalámpa' : ''})`;
+
+    // A naplóba egy cellába: „OBD: P0110 | 6A8: P1445 (aktív, státusz 0x60)”.
+    const cell = csvLabel(
+      `OBD: ${obdCodes.length ? obdCodes.join(' ') : 'nincs'} | 6A8: ${
+        psaCodes == null ? 'nem válaszolt' : psaCodes.length ? psaCodes.map(psaText).join(' ') : 'nincs'
+      }`
+    );
+    this.writeRow({ time: time.getTime(), values: {}, raw: {}, dtc: cell });
+
+    const car = this.snap.car;
+    const lines = [
+      `Clapp hibakódok – ${car ? CARS[car].label : 'autó nincs kiválasztva'}${this.elm?.vin ? ` – VIN: ${this.elm.vin}` : ''}`,
+      `${time.toLocaleString('hu-HU')} (${time.toISOString()}), ${reason}`,
+      '',
+      'Szabványos OBD hibakódok (Mode 03):',
+      ...(obdCodes.length ? obdCodes.map((c) => `  ${c}`) : ['  nincs']),
+      '',
+      `Motorvezérlő gyári hibakódjai (${ENGINE.tx}/${ENGINE.rx}${psaRequest ? `, kérés: ${psaRequest}` : ''}):`,
+      ...(psaCodes == null ? ['  a vezérlő nem válaszolt'] : psaCodes.length ? psaCodes.map((d) => `  ${psaText(d)}`) : ['  nincs']),
+      '',
+    ];
+    try {
+      const tag = `${car ?? 'auto'}${this.elm?.vin ? `-${this.elm.vin}` : ''}`;
+      const file = await writeTextFile('clapp-hibakod', tag, lines.join('\n'), time);
+      this.set({ dtcFile: file });
+    } catch (e) {
+      this.set({ error: `Nem sikerült menteni a hibakódokat: ${errorMessage(e)}` });
+    }
   }
 
   clearError() {
