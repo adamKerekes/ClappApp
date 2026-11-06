@@ -654,7 +654,12 @@ class ObdSession {
   private async readAllDtcs(elm: Elm327) {
     const obdCodes = await elm.readDtcs();
     const psa = await readPsaDtcs(elm, ENGINE).catch(() => null);
-    return { obdCodes, psaCodes: psa?.request ? psa.dtcs : null, psaRequest: psa?.request ?? null };
+    return {
+      obdCodes,
+      psaCodes: psa?.request ? psa.dtcs : null,
+      psaRequest: psa?.request ?? null,
+      psaRaw: psa?.raw ?? null,
+    };
   }
 
   async readDtcs() {
@@ -672,14 +677,17 @@ class ObdSession {
 
   /** Megjeleníti, külön szövegfájlba menti, és ha fut a rögzítés, a naplóba is beírja. */
   private async saveDtcs(
-    result: { obdCodes: string[]; psaCodes: PsaDtc[] | null; psaRequest: string | null },
+    result: { obdCodes: string[]; psaCodes: PsaDtc[] | null; psaRequest: string | null; psaRaw: string | null },
     reason: string
   ) {
     const time = new Date();
-    const { obdCodes, psaCodes, psaRequest } = result;
+    const { obdCodes, psaCodes, psaRequest, psaRaw } = result;
     this.set({ dtcs: obdCodes, psaDtcs: psaCodes, dtcTime: time.getTime() });
 
-    const psaText = (d: PsaDtc) => `${d.code} (${DTC_STATE_LABELS[d.state]}, státusz 0x${d.status}${d.lamp ? ', hibalámpa' : ''})`;
+    const psaText = (d: PsaDtc) =>
+      `${d.code} (${DTC_STATE_LABELS[d.state]}, ${psaRequest === '17FF00' ? 'adatbájt' : 'státusz'} 0x${d.status}${
+        d.lamp ? ', hibalámpa' : ''
+      })`;
 
     // A naplóba egy cellába: „OBD: P0110 | 6A8: P1445 (aktív, státusz 0x60)”.
     const cell = csvLabel(
@@ -698,7 +706,12 @@ class ObdSession {
       ...(obdCodes.length ? obdCodes.map((c) => `  ${c}`) : ['  nincs']),
       '',
       `Motorvezérlő gyári hibakódjai (${ENGINE.tx}/${ENGINE.rx}${psaRequest ? `, kérés: ${psaRequest}` : ''}):`,
-      ...(psaCodes == null ? ['  a vezérlő nem válaszolt'] : psaCodes.length ? psaCodes.map((d) => `  ${psaText(d)}`) : ['  nincs']),
+      ...(psaCodes == null
+        ? ['  a vezérlő nem válaszolt']
+        : psaCodes.length
+          ? psaCodes.map((d) => `  ${psaText(d)}${d.text ? ` – ${d.text}` : ''}`)
+          : ['  nincs']),
+      ...(psaRaw ? ['', `Nyers válasz: ${psaRaw}`] : []),
       '',
     ];
     try {

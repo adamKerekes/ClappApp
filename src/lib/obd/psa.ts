@@ -179,10 +179,15 @@ export type PsaDtc = {
   code: string;
   /** A státuszbájt hexában, ahogy a vezérlő küldte. */
   status: string;
-  /** Aktív (most is fennáll), tárolt (korábban volt), vagy nem eldönthető. */
-  state: 'active' | 'stored' | 'intermittent' | 'unknown';
-  /** Kérte-e a vezérlő a hibalámpát. */
+  /**
+   * Aktív (most is fennáll), tárolt (korábban volt), időszakos, nem eldönthető, vagy (a PSA
+   * `17FF00` kérésnél) csak annyi biztos, hogy a vezérlő hibalistáján szerepel.
+   */
+  state: 'active' | 'stored' | 'intermittent' | 'unknown' | 'listed';
+  /** Kérte-e a vezérlő a hibalámpát (csak a szabványos státuszbájtból tudható). */
   lamp: boolean;
+  /** Rövid magyar leírás, ha ismert (PSA jelentés, nem a szabványos). */
+  text?: string;
 };
 
 export type PsaDtcResult = {
@@ -190,6 +195,20 @@ export type PsaDtcResult = {
   /** A sikeres olvasó kérés (`17FF00`, `1800FF00` vagy `1902FF`), vagy `null`. */
   request: string | null;
   dtcs: PsaDtc[];
+  /** A vezérlő nyers válasza (hexa), a későbbi visszafejtéshez. */
+  raw: string | null;
+};
+
+/**
+ * PSA-specifikus jelentések (a P1xxx / U1xxx kódok mást jelentenek, mint a generikus
+ * listákban). Csak forrással ellenőrzött vagy jelöltként megjelölt kódok.
+ */
+export const PSA_DTC_TEXT: Record<string, string> = {
+  P1445: 'FAP adalék- / hamutelítettség',
+  P1457: 'részecskeszűrő (FAP) lyukas vagy hiányzik',
+  P16A3: 'motorvezérlő belső hibája (jelölt, nem ellenőrzött)',
+  U1208: 'hibás adat a motorvezérlőtől a CAN-hálózaton',
+  U1209: 'kommunikációs hiba a váltóvezérlővel (hibás fogadott érték)',
 };
 
 const DTC_SYSTEMS = ['P', 'C', 'B', 'U'];
@@ -214,12 +233,26 @@ function kwpState(status: number): PsaDtc['state'] {
 }
 
 /**
+ * A hiba állapota a kérés fajtája szerint.
+ * - `17FF00` (PSA „aktuális hibák listája”): a 3. bájt PSA-specifikus adat, nem az ISO 14230
+ *   státuszbájt (a 508 mindhárom kódjánál 0x01, ISO szerint ez „nincs tárolva” lenne). Csak az
+ *   biztos, hogy a vezérlő listáján szerepel.
+ * - `1800FF00`: ISO 14230 státuszbájt.
+ * - `1902FF`: UDS, 0. bit = most is hibás, 3. bit = megerősített (tárolt).
+ */
+function dtcState(command: string, status: number): PsaDtc['state'] {
+  if (command === '17FF00') return 'listed';
+  if (command === '1902FF') return status & 0x01 ? 'active' : status & 0x08 ? 'stored' : 'unknown';
+  return kwpState(status);
+}
+
+/**
  * A vezérlő gyári hibakódjainak kiolvasása, csak olvasás (törlést nem küld). Előbb a
  * PSA KWP2000 kérését (`17FF00`) próbálja, utána a szabványos KWP (`1800FF00`) és az UDS
  * (`1902FF`) változatot. A szabványos OBD címre a végén mindig visszaáll.
  */
 export async function readPsaDtcs(elm: Elm327, ecu: PsaEcu): Promise<PsaDtcResult> {
-  const result: PsaDtcResult = { ecu, request: null, dtcs: [] };
+  const result: PsaDtcResult = { ecu, request: null, dtcs: [], raw: null };
   let session: string | null = null;
   try {
     session = await openSession(elm, ecu);
@@ -237,6 +270,7 @@ export async function readPsaDtcs(elm: Elm327, ecu: PsaEcu): Promise<PsaDtcResul
       const line = lines.find((l) => l.startsWith(r.reply));
       if (!line) continue;
       result.request = r.command;
+      result.raw = line;
       const bytes: number[] = [];
       const body = line.slice(r.reply.length);
       for (let i = 0; i + 1 < body.length; i += 2) bytes.push(parseInt(body.slice(i, i + 2), 16));
@@ -251,9 +285,10 @@ export async function readPsaDtcs(elm: Elm327, ecu: PsaEcu): Promise<PsaDtcResul
         result.dtcs.push({
           code,
           status: status.toString(16).toUpperCase().padStart(2, '0'),
-          // UDS: 0. bit = most is hibás, 3. bit = megerősített (tárolt).
-          state: r.uds ? (status & 0x01 ? 'active' : status & 0x08 ? 'stored' : 'unknown') : kwpState(status),
-          lamp: (status & 0x80) !== 0,
+          state: dtcState(r.command, status),
+          // A PSA 17FF00 adatbájtjának bitjei nem ismertek, ott a hibalámpát nem állítjuk.
+          lamp: r.command !== '17FF00' && (status & 0x80) !== 0,
+          text: PSA_DTC_TEXT[code],
         });
       }
       break;
@@ -269,4 +304,5 @@ export const DTC_STATE_LABELS: Record<PsaDtc['state'], string> = {
   stored: 'tárolt',
   intermittent: 'időszakos',
   unknown: 'ismeretlen állapot',
+  listed: 'a hibalistán',
 };
