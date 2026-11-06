@@ -144,9 +144,19 @@ export class Elm327 {
           break;
         }
       }
-      const bytes = this.findMode01Payload(response, base);
-      if (!bytes || bytes.length < 4) break;
-      const mask = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+      // Több vezérlő is válaszolhat (pl. a 508-on a robotizált váltó is), és nem mindig a
+      // motorvezérlő az első: a válaszok bitmaszkjainak unióját vesszük.
+      const prefix = `41${base.toString(16).toUpperCase().padStart(2, '0')}`;
+      let mask = 0;
+      let found = false;
+      for (const line of response) {
+        if (!line.startsWith(prefix)) continue;
+        const bytes = hexToBytes(line.slice(prefix.length));
+        if (bytes.length < 4) continue;
+        mask = (mask | (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+        found = true;
+      }
+      if (!found) break;
       for (let bit = 0; bit < 32; bit++) {
         if (mask & (1 << (31 - bit))) {
           this.supportedPids.add((base + bit + 1).toString(16).toUpperCase().padStart(2, '0'));

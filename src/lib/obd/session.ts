@@ -338,8 +338,9 @@ class ObdSession {
   private visibleParams(car: CarId | null, factory: FactoryState): string[] {
     return PARAMS.filter((p) => {
       if (p.source.kind === 'battery') return true;
-      if (p.source.kind === 'pid') return this.pids.has(p.id);
-      return car != null && factory !== 'off' && factory !== 'unavailable';
+      const zonesOn = car != null && factory !== 'off' && factory !== 'unavailable';
+      if (p.source.kind === 'pid') return this.pids.has(p.id) || (p.source.zone != null && zonesOn);
+      return zonesOn;
     }).map((p) => p.id);
   }
 
@@ -447,8 +448,12 @@ class ObdSession {
           if (!reply.complete || bytes.length < longest) continue;
           this.zoneLengths[zone] = bytes.length;
           for (const param of PARAMS) {
-            if (param.source.kind === 'zone' && param.source.zone === zone) {
-              this.store(param.id, param.source.decode(bytes), row);
+            const src = param.source;
+            if (src.kind === 'zone' && src.zone === zone) {
+              this.store(param.id, src.decode(bytes), row);
+            } else if (src.kind === 'pid' && src.zone?.zone === zone && !this.pids.has(param.id)) {
+              // A szabványos PID-et az autó nem adja: a gyári zónából pótoljuk.
+              this.store(param.id, src.zone.decode(bytes), row);
             }
           }
         }
@@ -510,6 +515,7 @@ class ObdSession {
     const params = this.visibleParams(car, factory === 'off' ? 'pending' : factory)
       .map((id) => PARAMS.find((p) => p.id === id)!)
       .filter(Boolean);
+    const withZones = factory === 'pending' || factory === 'ok';
     const columns = ['ido', 'ms'];
     const cells: RecordingState['cells'] = [];
     const add = (column: string, cell: RecordingState['cells'][number]) => {
@@ -518,14 +524,22 @@ class ObdSession {
     };
     for (const p of params) {
       if (p.source.kind === 'pid') {
-        const def = this.pids.get(p.id)!;
-        // A [01xx] végződés kell a naplóelemzőnek (scripts/analyze-log.py).
-        add(csvLabel(`${def.label} (${def.unit}) [01${def.pid}]`), { kind: 'param', id: p.id, decimals: def.decimals });
+        const def = this.pids.get(p.id);
+        if (def) {
+          // A [01xx] végződés kell a naplóelemzőnek (scripts/analyze-log.py).
+          add(csvLabel(`${def.label} (${def.unit}) [01${def.pid}]`), { kind: 'param', id: p.id, decimals: def.decimals });
+        } else if (p.source.zone && withZones) {
+          const z = p.source.zone;
+          add(csvLabel(`${p.label} (${p.unit || '-'}) [21${z.zone} b${z.bytes}]`), {
+            kind: 'param',
+            id: p.id,
+            decimals: p.decimals,
+          });
+        }
       } else if (p.source.kind === 'battery') {
         add('Akkumulátor (V) [ATRV]', { kind: 'param', id: p.id, decimals: 2 });
       }
     }
-    const withZones = factory === 'pending' || factory === 'ok';
     if (withZones) {
       for (const zone of ALL_ZONES) add(`${ENGINE.tx}.21${zone}`, { kind: 'zone', zone });
       for (const p of params) {
