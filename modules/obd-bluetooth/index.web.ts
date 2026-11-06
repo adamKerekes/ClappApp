@@ -35,7 +35,7 @@ const SUPPORTED = [0x04, 0x05, 0x0b, 0x0c, 0x0d, 0x0f, 0x10, 0x11, 0x2f, 0x34, 0
 
 /** Bájtok hexában, a megadott helyeken a megadott értékekkel (2–3 bájtos értékek nagy végűek). */
 function bytesHex(length: number, fields: [offset: number, size: number, value: number][]): string {
-  const bytes = new Array<number>(length).fill(0x11);
+  const bytes = new Array<number>(length).fill(0x00);
   for (const [offset, size, value] of fields) {
     const v = Math.max(0, Math.round(value));
     for (let i = 0; i < size; i++) bytes[offset + i] = (v >> (8 * (size - 1 - i))) & 0xff;
@@ -43,31 +43,54 @@ function bytesHex(length: number, fields: [offset: number, size: number, value: 
   return bytes.map((b) => hex(b, 1)).join('');
 }
 
+/** Injektor-korrekció (%) a 21C9 16 bites kódolásában: ((érték / 256) × 0,78) − 100. */
+const injector = (percent: number) => ((percent + 100) / 0.78) * 256;
+
 /**
- * Kitalált gyári zónák a PSA motorvezérlőhöz, a valódi (5008-as) kiosztással:
- * 21CA töltőnyomás, 21CB korom / DPF / kipufogó / km, 21DC számláló stb.
+ * Kitalált gyári zónák a PSA motorvezérlőhöz, a src/lib/obd/params.ts bájtkiosztásával
+ * (21C9 befecskendezés, 21CA levegő / töltőnyomás, 21CB FAP / korom / adalék, 21CC pedálok,
+ * 21CD hűtővíz, 21DC számláló). A nem használt bájtok 0x00-k, a valódi autón 0xFF-et
+ * adó helyek (21CA b31, b36) 0xFF-ek.
  */
 function zoneData(zone: number, t: number, s: { rpm: number; speed: number; coolant: number }): string | null {
-  const load = Math.max(0, s.speed / 80);
-  const boostReq = 1000 + 1500 * load;
+  const load = Math.max(0, Math.min(1, s.speed / 80));
+  const boostReq = 1000 + 1300 * load;
+  const cold = s.coolant < 60;
   switch (zone) {
     case 0x82:
       return `010C090B0C${[...'817062696   '].map((c) => hex(c.charCodeAt(0), 1)).join('')}`;
+    case 0xc9:
+      return bytesHex(30, [
+        [0, 2, s.rpm], [2, 1, s.speed], [9, 1, 25 + 40 * load],
+        [10, 2, 350 + 900 * load], [12, 2, 345 + 900 * load + 8 * Math.sin(t)],
+        [14, 2, (6 + 24 * load) * 10],
+        [16, 2, injector(1.5)], [18, 2, injector(-0.8)], [20, 2, injector(-3.2)], [22, 2, injector(0.6)],
+        [28, 1, Math.min(45, 15 + t / 6) + 50],
+      ]);
     case 0xca:
       return bytesHex(42, [
-        [0, 2, s.rpm], [2, 1, s.speed], [6, 2, boostReq], [8, 2, boostReq + 20 * Math.sin(t)],
-        [20, 2, 15], [37, 2, 350 + 600 * load], [39, 2, 400 + 500 * load],
+        [0, 2, s.rpm], [2, 1, s.speed], [4, 1, 12 + 50], [5, 1, 20 + 25 * load + 50],
+        [6, 2, boostReq], [8, 2, boostReq + 25 * Math.sin(t)], [10, 2, 1008],
+        [12, 1, 35 + 45 * load], [13, 1, 34 + 45 * load], [16, 1, cold ? 80 : 13], [17, 1, cold ? 79 : 13],
+        [20, 1, load < 0.4 ? 35 : 0], [21, 1, load < 0.4 ? 33 : 2],
+        [31, 1, 0xff], [32, 1, 8 + 50], [36, 1, 0xff],
+        [37, 2, 350 + 550 * load], [39, 2, 340 + 550 * load + 10 * Math.sin(t)],
       ]);
     case 0xcb:
       return bytesHex(37, [
-        [0, 2, s.rpm], [2, 1, s.speed], [4, 1, 60 + 40 * load], [9, 2, 1972 + t / 20], [16, 1, 5 + 60 * load],
-        [23, 2, 220 + 180 * load], [25, 2, 221 + 180 * load], [27, 1, t > 60 ? 16 : 0], [28, 2, 631 + t / 90],
-        [32, 1, s.speed > 30 ? 100 : 0], [33, 1, 62], [34, 3, 103752 + t / 720],
+        [0, 2, s.rpm], [2, 1, s.speed], [4, 2, (3.2 - 1.6 * load) * 1000], [6, 1, cold ? 100 : 30],
+        [9, 2, 1970 + t / 2], [11, 1, 17], [12, 3, 61240 + t / 720], [15, 2, 25 + 90 * load],
+        [17, 2, 3000], [19, 2, 1840], [21, 2, 48], [25, 2, 230 + 180 * load], [27, 1, cold ? 0x20 : 0],
+        [28, 2, 631 + t / 90], [30, 2, 465], [32, 1, s.speed > 30 ? 100 : 0], [33, 1, 62],
+        [34, 3, 103752 + t / 720],
       ]);
     case 0xc7:
       return bytesHex(12, [[0, 2, s.rpm], [2, 1, s.speed], [7, 1, s.speed < 3 ? 0xa6 : load > 0.6 ? 0xb0 : 0xa0], [8, 1, s.coolant + 50]]);
     case 0xcc:
-      return bytesHex(24, [[3, 1, 0xa0], [4, 2, 400 + 1800 * load], [6, 2, 200 + 900 * load]]);
+      return bytesHex(24, [
+        [3, 1, s.speed < 5 ? 0xa6 : 0xa0], [4, 2, 400 + 1800 * load], [6, 2, 200 + 900 * load],
+        [8, 1, 8 + 40 * load], [9, 1, s.speed < 5 ? 0 : Math.min(6, 1 + Math.floor(s.speed / 18))], [15, 1, 141],
+      ]);
     case 0xcd:
       return bytesHex(12, [[3, 1, s.coolant + 50], [10, 1, 20 + 40 * load]]);
     case 0xdc:
@@ -104,6 +127,8 @@ function respond(command: string): string {
     if (cmd === '81') return 'C1EF8F';
     if (cmd === '10C0') return '50C0';
     if (cmd === '3E' || cmd === '82' || cmd === '1081') return 'OK';
+    // Gyári hibakódok (PSA KWP, 17FF00): P1445 és U1209, ahogy az autók naplóiban.
+    if (cmd === '17FF00') return '5702144501D20901';
     if (cmd.startsWith('21')) {
       const zone = parseInt(cmd.slice(2), 16);
       const data = zoneData(zone, t, { rpm, speed, coolant });
