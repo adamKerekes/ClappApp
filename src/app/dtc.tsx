@@ -88,6 +88,7 @@ export default function DtcScreen() {
                   <ThemedText key={d.code} type="code">
                     {d.code} · {DTC_STATE_LABELS[d.state]} · 0x{d.status}
                     {d.lamp ? ' · hibalámpa' : ''}
+                    {d.text ? `\n${d.text}` : ''}
                   </ThemedText>
                 ))}
               </>

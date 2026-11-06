@@ -33,8 +33,16 @@ export const STATUS_TEXT: Record<ParamStatus, string> = {
 export type ZoneId = 'CA' | 'CB' | 'C7' | 'C9' | 'CC' | 'CD' | 'DC';
 
 export type ParamSource =
-  /** Szabványos OBD (Mode 01) PID; ha az autó nem ismeri, a `fallback` PID-et kérdezzük. */
-  | { kind: 'pid'; pid: string; fallback?: string }
+  /**
+   * Szabványos OBD (Mode 01) PID; ha az autó nem ismeri, a `fallback` PID-et kérdezzük. Ha egyiket
+   * sem ismeri (vagy a PID-lista hibás), a `zone` gyári zónából számoljuk.
+   */
+  | {
+      kind: 'pid';
+      pid: string;
+      fallback?: string;
+      zone?: { zone: ZoneId; bytes: string; decode: (b: number[]) => number | null };
+    }
   /** Az adapter által mért feszültség (`ATRV`). */
   | { kind: 'battery' }
   /** Gyári zóna bájtjai; a bájtszámozás a `61xx` utáni első adatbájttól 0. */
@@ -80,7 +88,7 @@ export const PARAMS: Param[] = [
     unit: '1/min',
     decimals: 0,
     status: 'identified',
-    source: { kind: 'pid', pid: '0C' },
+    source: { kind: 'pid', pid: '0C', zone: { zone: 'CA', bytes: '0–1', decode: u16(0) } },
     range: [0, 4500],
     // A 0 is normál: start-stop leállás (5008) vagy álló motor.
     ok: [0, 3500],
@@ -101,7 +109,7 @@ export const PARAMS: Param[] = [
     unit: 'km/h',
     decimals: 0,
     status: 'identified',
-    source: { kind: 'pid', pid: '0D' },
+    source: { kind: 'pid', pid: '0D', zone: { zone: 'CA', bytes: '2', decode: u8(2) } },
     range: [0, 160],
     description: 'A jármű sebessége a motorvezérlő szerint (szabványos OBD, 010D).',
     optimal: 'Nincs optimális érték. A regeneráláshoz 20–30 perc egyenletes 90–120 km/h a legjobb.',
@@ -117,7 +125,11 @@ export const PARAMS: Param[] = [
     unit: '°C',
     decimals: 0,
     status: 'identified',
-    source: { kind: 'pid', pid: '05' },
+    source: {
+      kind: 'pid',
+      pid: '05',
+      zone: { zone: 'CD', bytes: '3', decode: (b) => (b.length > 3 ? b[3] - 50 : null) },
+    },
     range: [0, 120],
     ok: [80, 100],
     description:
@@ -932,7 +944,7 @@ export const PARAMS: Param[] = [
       bytes: '16–17',
       decode: (b) => (b.length > 17 ? ((b[16] * 256 + b[17]) / 256) * 0.78 - 100 : null),
     },
-    range: [-10, 10],
+    range: [-20, 20],
     description:
       'A 1. henger injektorának alapjárati mennyiségkorrekciója (jelölt). Gyári zóna 21C9, 16–17. bájt (16 bites), % = nyers / 256 · 0,78 − 100. A FAP app 1 bájtos értékeket ad a 16–19. bájton, de az autón négy 16 bites érték van a 16–23. bájton.',
     optimal: 'Alapjáraton ±5 %-on belül, a négy henger összege kb. 0. Menet közben 0 körül (nem szabályoz).',
@@ -950,7 +962,7 @@ export const PARAMS: Param[] = [
       bytes: '18–19',
       decode: (b) => (b.length > 19 ? ((b[18] * 256 + b[19]) / 256) * 0.78 - 100 : null),
     },
-    range: [-10, 10],
+    range: [-20, 20],
     description:
       'A 2. henger injektorának alapjárati mennyiségkorrekciója (jelölt). Gyári zóna 21C9, 18–19. bájt (16 bites), % = nyers / 256 · 0,78 − 100. A FAP app 1 bájtos értékeket ad a 16–19. bájton, de az autón négy 16 bites érték van a 16–23. bájton.',
     optimal: 'Alapjáraton ±5 %-on belül, a négy henger összege kb. 0. Menet közben 0 körül (nem szabályoz).',
@@ -968,7 +980,7 @@ export const PARAMS: Param[] = [
       bytes: '20–21',
       decode: (b) => (b.length > 21 ? ((b[20] * 256 + b[21]) / 256) * 0.78 - 100 : null),
     },
-    range: [-10, 10],
+    range: [-20, 20],
     description:
       'A 3. henger injektorának alapjárati mennyiségkorrekciója (jelölt). Gyári zóna 21C9, 20–21. bájt (16 bites), % = nyers / 256 · 0,78 − 100. A FAP app 1 bájtos értékeket ad a 16–19. bájton, de az autón négy 16 bites érték van a 16–23. bájton.',
     optimal: 'Alapjáraton ±5 %-on belül, a négy henger összege kb. 0. Menet közben 0 körül (nem szabályoz).',
@@ -986,7 +998,7 @@ export const PARAMS: Param[] = [
       bytes: '22–23',
       decode: (b) => (b.length > 23 ? ((b[22] * 256 + b[23]) / 256) * 0.78 - 100 : null),
     },
-    range: [-10, 10],
+    range: [-20, 20],
     description:
       'A 4. henger injektorának alapjárati mennyiségkorrekciója (jelölt). Gyári zóna 21C9, 22–23. bájt (16 bites), % = nyers / 256 · 0,78 − 100. A FAP app 1 bájtos értékeket ad a 16–19. bájton, de az autón négy 16 bites érték van a 16–23. bájton.',
     optimal: 'Alapjáraton ±5 %-on belül, a négy henger összege kb. 0. Menet közben 0 körül (nem szabályoz).',
@@ -1120,7 +1132,11 @@ export const PARAM_BY_ID: Record<string, Param> = Object.fromEntries(PARAMS.map(
 export function sourceText(param: Param): string {
   const s = param.source;
   if (s.kind === 'battery') return 'Adapter feszültségmérése (ATRV)';
-  if (s.kind === 'pid') return `Szabványos OBD, PID 01${s.pid}${s.fallback ? ` (vagy 01${s.fallback})` : ''}`;
+  if (s.kind === 'pid') {
+    const alt = s.fallback ? ` (vagy 01${s.fallback})` : '';
+    const zone = s.zone ? `; ha az autó nem adja, gyári zóna 21${s.zone.zone}, ${s.zone.bytes}. bájt` : '';
+    return `Szabványos OBD, PID 01${s.pid}${alt}${zone}`;
+  }
   return `Motorvezérlő gyári zóna 21${s.zone}, bájt ${s.bytes} (6A8/688)`;
 }
 

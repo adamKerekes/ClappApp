@@ -338,8 +338,9 @@ class ObdSession {
   private visibleParams(car: CarId | null, factory: FactoryState): string[] {
     return PARAMS.filter((p) => {
       if (p.source.kind === 'battery') return true;
-      if (p.source.kind === 'pid') return this.pids.has(p.id);
-      return car != null && factory !== 'off' && factory !== 'unavailable';
+      const zonesOn = car != null && factory !== 'off' && factory !== 'unavailable';
+      if (p.source.kind === 'pid') return this.pids.has(p.id) || (p.source.zone != null && zonesOn);
+      return zonesOn;
     }).map((p) => p.id);
   }
 
@@ -447,8 +448,12 @@ class ObdSession {
           if (!reply.complete || bytes.length < longest) continue;
           this.zoneLengths[zone] = bytes.length;
           for (const param of PARAMS) {
-            if (param.source.kind === 'zone' && param.source.zone === zone) {
-              this.store(param.id, param.source.decode(bytes), row);
+            const src = param.source;
+            if (src.kind === 'zone' && src.zone === zone) {
+              this.store(param.id, src.decode(bytes), row);
+            } else if (src.kind === 'pid' && src.zone?.zone === zone && !this.pids.has(param.id)) {
+              // A szabványos PID-et az autó nem adja: a gyári zónából pótoljuk.
+              this.store(param.id, src.zone.decode(bytes), row);
             }
           }
         }
@@ -510,6 +515,7 @@ class ObdSession {
     const params = this.visibleParams(car, factory === 'off' ? 'pending' : factory)
       .map((id) => PARAMS.find((p) => p.id === id)!)
       .filter(Boolean);
+    const withZones = factory === 'pending' || factory === 'ok';
     const columns = ['ido', 'ms'];
     const cells: RecordingState['cells'] = [];
     const add = (column: string, cell: RecordingState['cells'][number]) => {
@@ -518,14 +524,22 @@ class ObdSession {
     };
     for (const p of params) {
       if (p.source.kind === 'pid') {
-        const def = this.pids.get(p.id)!;
-        // A [01xx] végződés kell a naplóelemzőnek (scripts/analyze-log.py).
-        add(csvLabel(`${def.label} (${def.unit}) [01${def.pid}]`), { kind: 'param', id: p.id, decimals: def.decimals });
+        const def = this.pids.get(p.id);
+        if (def) {
+          // A [01xx] végződés kell a naplóelemzőnek (scripts/analyze-log.py).
+          add(csvLabel(`${def.label} (${def.unit}) [01${def.pid}]`), { kind: 'param', id: p.id, decimals: def.decimals });
+        } else if (p.source.zone && withZones) {
+          const z = p.source.zone;
+          add(csvLabel(`${p.label} (${p.unit || '-'}) [21${z.zone} b${z.bytes}]`), {
+            kind: 'param',
+            id: p.id,
+            decimals: p.decimals,
+          });
+        }
       } else if (p.source.kind === 'battery') {
         add('Akkumulátor (V) [ATRV]', { kind: 'param', id: p.id, decimals: 2 });
       }
     }
-    const withZones = factory === 'pending' || factory === 'ok';
     if (withZones) {
       for (const zone of ALL_ZONES) add(`${ENGINE.tx}.21${zone}`, { kind: 'zone', zone });
       for (const p of params) {
@@ -640,7 +654,12 @@ class ObdSession {
   private async readAllDtcs(elm: Elm327) {
     const obdCodes = await elm.readDtcs();
     const psa = await readPsaDtcs(elm, ENGINE).catch(() => null);
-    return { obdCodes, psaCodes: psa?.request ? psa.dtcs : null, psaRequest: psa?.request ?? null };
+    return {
+      obdCodes,
+      psaCodes: psa?.request ? psa.dtcs : null,
+      psaRequest: psa?.request ?? null,
+      psaRaw: psa?.raw ?? null,
+    };
   }
 
   async readDtcs() {
@@ -658,14 +677,17 @@ class ObdSession {
 
   /** Megjeleníti, külön szövegfájlba menti, és ha fut a rögzítés, a naplóba is beírja. */
   private async saveDtcs(
-    result: { obdCodes: string[]; psaCodes: PsaDtc[] | null; psaRequest: string | null },
+    result: { obdCodes: string[]; psaCodes: PsaDtc[] | null; psaRequest: string | null; psaRaw: string | null },
     reason: string
   ) {
     const time = new Date();
-    const { obdCodes, psaCodes, psaRequest } = result;
+    const { obdCodes, psaCodes, psaRequest, psaRaw } = result;
     this.set({ dtcs: obdCodes, psaDtcs: psaCodes, dtcTime: time.getTime() });
 
-    const psaText = (d: PsaDtc) => `${d.code} (${DTC_STATE_LABELS[d.state]}, státusz 0x${d.status}${d.lamp ? ', hibalámpa' : ''})`;
+    const psaText = (d: PsaDtc) =>
+      `${d.code} (${DTC_STATE_LABELS[d.state]}, ${psaRequest === '17FF00' ? 'adatbájt' : 'státusz'} 0x${d.status}${
+        d.lamp ? ', hibalámpa' : ''
+      })`;
 
     // A naplóba egy cellába: „OBD: P0110 | 6A8: P1445 (aktív, státusz 0x60)”.
     const cell = csvLabel(
@@ -684,7 +706,12 @@ class ObdSession {
       ...(obdCodes.length ? obdCodes.map((c) => `  ${c}`) : ['  nincs']),
       '',
       `Motorvezérlő gyári hibakódjai (${ENGINE.tx}/${ENGINE.rx}${psaRequest ? `, kérés: ${psaRequest}` : ''}):`,
-      ...(psaCodes == null ? ['  a vezérlő nem válaszolt'] : psaCodes.length ? psaCodes.map((d) => `  ${psaText(d)}`) : ['  nincs']),
+      ...(psaCodes == null
+        ? ['  a vezérlő nem válaszolt']
+        : psaCodes.length
+          ? psaCodes.map((d) => `  ${psaText(d)}${d.text ? ` – ${d.text}` : ''}`)
+          : ['  nincs']),
+      ...(psaRaw ? ['', `Nyers válasz: ${psaRaw}`] : []),
       '',
     ];
     try {
