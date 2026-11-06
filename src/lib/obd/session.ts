@@ -61,7 +61,7 @@ const ENGINE: PsaEcu = { id: 'engine', label: 'Motorvezérlő', tx: '6A8', rx: '
 
 /** Minden körben olvasott zónák, és a felváltva olvasottak (körönként egy). */
 const ZONES_EVERY_ROUND: ZoneId[] = ['CA', 'CB'];
-const ZONES_ROTATING: ZoneId[] = ['C7', 'CC', 'CD', 'DC'];
+const ZONES_ROTATING: ZoneId[] = ['C7', 'C9', 'CC', 'CD', 'DC'];
 const ALL_ZONES: ZoneId[] = [...ZONES_EVERY_ROUND, ...ZONES_ROTATING];
 
 /** Gyorsan változó szabványos értékek: minden körben. */
