@@ -46,6 +46,25 @@ export async function createLogFile(header: string, tag: string, time = new Date
   };
 }
 
+/** Egyszeri szövegfájl (pl. hibakód-kiolvasás) a naplók mellé, megosztható a Mentések közül. */
+export async function writeTextFile(prefix: string, tag: string, text: string, time = new Date()): Promise<{ name: string; uri: string }> {
+  const stamp = time.toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const name = `${prefix}-${tag}-${stamp}.txt`;
+  if (isWeb) {
+    webFiles.set(name, text);
+    return { name, uri: name };
+  }
+  const { File } = await import('expo-file-system');
+  const dir = await logDirectory();
+  const file = new File(dir, name);
+  file.create({ overwrite: true });
+  await file.write(text);
+  return { name: file.name, uri: file.uri };
+}
+
+/** A hibakód-fájlok kicsik, de kellenek: a méretszűrő nem vonatkozik rájuk. */
+const isDtcFile = (name: string) => name.startsWith('clapp-hibakod-');
+
 export type SavedLog = { name: string; uri: string; size: number };
 
 /**
@@ -59,7 +78,7 @@ export async function listLogFiles(): Promise<SavedLog[]> {
   if (isWeb) {
     return [...webFiles.entries()]
       .map(([name, text]) => ({ name, uri: name, size: text.length }))
-      .filter((f) => f.size >= MIN_SAVED_SIZE)
+      .filter((f) => f.size >= MIN_SAVED_SIZE || isDtcFile(f.name))
       .reverse();
   }
   const { File } = await import('expo-file-system');
@@ -68,7 +87,7 @@ export async function listLogFiles(): Promise<SavedLog[]> {
     .list()
     .filter((item): item is InstanceType<typeof File> => item instanceof File && /\.(csv|txt)$/.test(item.name))
     .map((f) => ({ name: f.name, uri: f.uri, size: f.size ?? 0 }))
-    .filter((f) => f.size >= MIN_SAVED_SIZE)
+    .filter((f) => f.size >= MIN_SAVED_SIZE || isDtcFile(f.name))
     .sort((a, b) => b.name.slice(-23).localeCompare(a.name.slice(-23)));
 }
 
@@ -85,7 +104,7 @@ export async function deleteLogFile(uri: string): Promise<void> {
 export async function shareLogFile(uri: string): Promise<void> {
   if (isWeb) {
     // Weben letöltjük a fájlt.
-    const blob = new Blob([webFiles.get(uri) ?? ''], { type: 'text/csv' });
+    const blob = new Blob([webFiles.get(uri) ?? ''], { type: uri.endsWith('.txt') ? 'text/plain' : 'text/csv' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.download = uri;
