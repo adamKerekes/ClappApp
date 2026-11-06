@@ -8,7 +8,7 @@ import { Elm327 } from './elm327';
 import { createLogFile, deleteLogFile, type LogFile } from './log';
 import { PARAMS, type Param, type ZoneId } from './params';
 import { AFTERTREATMENT_PIDS, LIVE_PIDS, type PidDefinition } from './pids';
-import { closeSession, openSession, type PsaEcu, readZone } from './psa';
+import { closeSession, openSession, type PsaEcu, readZone, readZoneChecked } from './psa';
 
 /**
  * Az OBD kapcsolat és az adatgyűjtés egy helyen, a képernyőktől függetlenül.
@@ -144,6 +144,8 @@ class ObdSession {
   /** Nyitott gyári munkamenet nyitó kérése (pl. `81`), vagy `null`. */
   private factorySession: string | null = null;
   private factoryFails = 0;
+  /** Zónánként a leghosszabb hiánytalan válasz bájtszáma; ennél rövidebbet nem számolunk át. */
+  private zoneLengths: Partial<Record<ZoneId, number>> = {};
 
   private history = new Map<string, Series>();
   private seriesCache = new Map<string, { version: number; data: Series }>();
@@ -243,6 +245,7 @@ class ObdSession {
       this.elm = elm;
       this.factorySession = null;
       this.factoryFails = 0;
+      this.zoneLengths = {};
       this.round = 0;
       this.set({
         status: 'connected',
@@ -399,11 +402,16 @@ class ObdSession {
       if (this.factorySession) {
         for (const zone of zones) {
           if (!active()) break;
-          const data = await readZone(elm, zone);
-          if (!data) continue;
+          const reply = await readZoneChecked(elm, zone);
+          if (!reply) continue;
           gotAny = true;
-          row.raw[zone] = data;
-          const bytes = hexBytes(data);
+          // A nyers választ csonkán is naplózzuk (a visszafejtéshez), de értéket csak a
+          // hiánytalanból számolunk, különben elcsúszott bájtokból szemét kerülne a naplóba.
+          row.raw[zone] = reply.data;
+          const bytes = hexBytes(reply.data);
+          const longest = this.zoneLengths[zone] ?? 0;
+          if (!reply.complete || bytes.length < longest) continue;
+          this.zoneLengths[zone] = bytes.length;
           for (const param of PARAMS) {
             if (param.source.kind === 'zone' && param.source.zone === zone) {
               this.store(param.id, param.source.decode(bytes), row);

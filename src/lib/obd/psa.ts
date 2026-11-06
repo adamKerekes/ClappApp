@@ -81,10 +81,40 @@ export async function closeSession(elm: Elm327, session: string | null) {
 }
 
 export async function readZone(elm: Elm327, zoneHex: string): Promise<string | null> {
-  const lines = joinFrames(await elm.send(`21${zoneHex}`, 1500).catch(() => [] as string[]));
+  return (await readZoneChecked(elm, zoneHex))?.data ?? null;
+}
+
+/**
+ * Mint a `readZone`, de azt is megmondja, hogy a válasz hiánytalan-e. A hosszú (több
+ * képkockás) válaszokból néha elveszik egy CAN képkocka; ilyenkor a bájtok elcsúsznak, és a
+ * belőlük számolt értékek szemetek (pl. 65 280 mbar töltőnyomás, 535 °C kipufogó).
+ */
+export async function readZoneChecked(
+  elm: Elm327,
+  zoneHex: string
+): Promise<{ data: string; complete: boolean } | null> {
+  const raw = await elm.send(`21${zoneHex}`, 1500).catch(() => [] as string[]);
+  const lines = joinFrames(raw);
   const prefix = `61${zoneHex}`;
   const line = lines.find((l) => l.startsWith(prefix));
-  return line && line.length > prefix.length ? line.slice(prefix.length) : null;
+  if (!line || line.length <= prefix.length) return null;
+  return { data: line.slice(prefix.length), complete: isCompleteResponse(raw, line) };
+}
+
+/**
+ * Több képkockás válasznál az első sor a teljes hossz bájtban (pl. `02E`), a képkockák
+ * `0:`, `1:` … `F:`, `0:` sorszámot kapnak. Hiányos, ha kimaradt egy sorszám, vagy kevesebb
+ * bájt jött, mint a bejelentett hossz.
+ */
+export function isCompleteResponse(rawLines: string[], joined: string): boolean {
+  const frames = rawLines.filter((l) => /^[0-9A-F]:/.test(l));
+  if (frames.length === 0) return true; // egy képkockás válasz
+  for (let i = 0; i < frames.length; i++) {
+    if (parseInt(frames[i][0], 16) !== i % 16) return false;
+  }
+  const lengthLine = rawLines.find((l) => /^[0-9A-F]{3}$/.test(l));
+  if (!lengthLine) return true; // nincs bejelentett hossz, nem tudjuk ellenőrizni
+  return joined.length / 2 >= parseInt(lengthLine, 16);
 }
 
 /**
