@@ -6,7 +6,8 @@ import type { CarId } from './cars';
  * (`clapp/tudasbazis.md`) és a naplóelemzésekből (`clapp/elemzes/`) származik.
  *
  * Bizonyosság (a tudásbázis jelöléseivel):
- * - `identified`: ✅ autón mért adatból igazolva, vagy szabványos OBD érték.
+ * - `identified`: ✅ autón mért adatból igazolva, szabványos OBD érték, vagy a FAP Lite app
+ *   (SID807 profil) paramétertáblájából (`clapp/elemzes/faplite-apk-vizsgalat-2026-11-06.md`).
  * - `questionable`: 🟡 a viselkedés illik rá, de még nincs igazolva.
  * - `unidentified`: ❓ változó gyári adat, a jelentése még nem ismert (nyers érték).
  */
@@ -19,7 +20,8 @@ export const STATUS_LABELS: Record<ParamStatus, string> = {
 };
 
 export const STATUS_TEXT: Record<ParamStatus, string> = {
-  identified: 'Egyértelműen azonosított: autón mért adatból igazolva, vagy szabványos OBD érték.',
+  identified:
+    'Egyértelműen azonosított: autón mért adatból igazolva, szabványos OBD érték, vagy a FAP Lite app gyári paramétertáblája (SID807 profil) szerint.',
   questionable:
     'Kérdéses: a viselkedése illik a jelentésre, de még nincs igazolva (pl. regenerálás kell hozzá). A név és a mértékegység tévedhet.',
   unidentified:
@@ -406,6 +408,195 @@ export const PARAMS: Param[] = [
     },
   },
 
+  // ✅ Gyári zónák, a FAP Lite app paramétertáblája szerint (SID807 profil) --------------
+  {
+    id: 'fapKm',
+    label: 'FAP-pal megtett km',
+    unit: 'km',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CB', bytes: '34–36', decode: u24(34) },
+    description:
+      'A jelenlegi részecskeszűrővel (FAP) megtett kilométer. Gyári zóna 21CB, 34–36. bájt, km = nyers, kb. 8 km-enként frissül. A FAP Lite app (SID807 profil) így nevezi, és a viselkedése (1 egység = 1 km, nem a km-óra) mindkét autón illik rá.',
+    optimal:
+      'Nincs optimális érték. A szűrő élettartama a hamutelítettségtől függ, általában 120 000–180 000 km; FAP-cserénél nullázni kell.',
+    cars: {
+      '5008': 'Km-óra 312 986 km-nél 103 640, tehát kb. 209 350 km-es óraállásnál volt FAP-csere (vagy nullázás).',
+      '508': 'Km-óra 296 900 km-nél kb. 108 460, tehát kb. 188 400 km-es óraállásnál volt FAP-csere (vagy nullázás).',
+    },
+  },
+  {
+    id: 'fapAsh',
+    label: 'FAP hamutelítettség',
+    unit: '%',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CB', bytes: '11', decode: u8(11) },
+    range: [0, 100],
+    ok: [0, 80],
+    description:
+      'A részecskeszűrőben lerakódott, regenerálással el nem égethető hamu (főleg Eolys adalék és olajhamu) becsült aránya. Gyári zóna 21CB, 11. bájt, % = nyers (FAP Lite, SID807 profil). Ez a vezérlő becslése, nem mérés.',
+    optimal: 'Minél kisebb. 100 %-nál a szűrő cserére vagy tisztításra szorul; a korommal ellentétben regeneráláskor nem csökken.',
+    cars: {
+      '5008': '52 % (0x34). A nagy nyomáskülönbség-jelöltet ez önmagában nem magyarázza, ellenőrizni kell.',
+      '508': '67 % (0x43).',
+    },
+  },
+  {
+    id: 'eolysTank',
+    label: 'Eolys tartály térfogata',
+    unit: 'mL',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CB', bytes: '17–18', decode: u16(17) },
+    description:
+      'Az adaléktartályban a legutóbbi feltöltéskor (nullázáskor) beállított adalékmennyiség. Gyári zóna 21CB, 17–18. bájt, mL = nyers (FAP Lite, SID807 profil).',
+    optimal: 'Állandó, csak adalék-feltöltés és Diagbox-nullázás után változik.',
+    cars: { '5008': '1020 mL.', '508': '1220 mL.' },
+  },
+  {
+    id: 'eolysLeft',
+    label: 'Maradék Eolys adalék',
+    unit: 'mL',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CB', bytes: '19–20', decode: u16(19) },
+    ok: [100, 5000],
+    description:
+      'A vezérlő szerint a tartályban maradt FAP adalék (Eolys). Gyári zóna 21CB, 19–20. bájt, mL = nyers (FAP Lite, SID807 profil). Tankoláskor csökken, mert az adalékot az üzemanyaghoz adagolja.',
+    optimal: 'Ha elfogy, a regenerálás romlik és a műszerfalon FAP-hiba jelenik meg. Kevés maradéknál utántöltés javasolt.',
+    cars: { '5008': '678 → 676 mL.', '508': '1206 mL: a tartály majdnem tele, nemrég tölthették vagy nullázták.' },
+  },
+  {
+    id: 'eolysUsed',
+    label: 'Elhasznált Eolys adalék',
+    unit: 'mL',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CB', bytes: '21–22', decode: u16(21) },
+    description:
+      'A legutóbbi feltöltés óta befecskendezett adalék. Gyári zóna 21CB, 21–22. bájt, mL = nyers. A FAP Lite nem nevezi meg, de mindkét autón pontosan a tartály térfogata mínusz a maradék.',
+    optimal: 'Nincs optimális érték, tankolásonként néhány mL-rel nő.',
+    cars: { '5008': '342 → 344 mL (= 1020 − 678 → 1020 − 676).', '508': '14 mL (= 1220 − 1206).' },
+  },
+  {
+    id: 'baro',
+    label: 'Légköri nyomás',
+    unit: 'mbar',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CA', bytes: '10–11', decode: u16(10) },
+    range: [900, 1100],
+    description:
+      'A motorvezérlő légköri nyomás érzékelője. Gyári zóna 21CA, 10–11. bájt, mbar = nyers (FAP Lite, SID807 profil). Ugyanaz a kódolás, mint a mellette lévő töltőnyomásé.',
+    optimal: 'Tengerszinten kb. 1013 mbar, magasabban kevesebb. Álló motornál a mért töltőnyomással közel egyezik.',
+    cars: { '5008': 'Nincs külön megfigyelés.', '508': 'Nincs külön megfigyelés.' },
+  },
+  {
+    id: 'egrReq',
+    label: 'EGR kért helyzet',
+    unit: '%',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CA', bytes: '20', decode: u8(20) },
+    range: [0, 100],
+    description:
+      'A kipufogógáz-visszavezető (EGR) szelep kért nyitása. Gyári zóna 21CA, 20. bájt, % = nyers (FAP Lite, EDC17C10 / SID807_BR2 profil).',
+    optimal: 'Alapjáraton és kis terhelésnél nyitva, nagy terhelésnél zárva. Tartósan 0 helyettesítő üzemmódra utalhat.',
+    cars: {
+      '5008': 'Normálisan 15–16 %. A 2026-11-01-i helyettesítő üzemmódban 0 volt (EGR letiltva).',
+      '508': 'Nincs külön megfigyelés.',
+    },
+  },
+  {
+    id: 'egrAct',
+    label: 'EGR mért helyzet',
+    unit: '%',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CA', bytes: '21', decode: u8(21) },
+    range: [0, 100],
+    description:
+      'A kipufogógáz-visszavezető (EGR) szelep mért nyitása. Gyári zóna 21CA, 21. bájt, % = nyers (FAP Lite, EDC17C10 / SID807_BR2 profil).',
+    optimal: 'Kövesse a kért helyzetet néhány %-on belül. Tartós eltérés kormos, beragadt szelepre utal.',
+    cars: {
+      '5008': 'Normálisan 15–16 %. A 2026-11-01-i helyettesítő üzemmódban 0 volt.',
+      '508': 'Nincs külön megfigyelés.',
+    },
+  },
+  {
+    id: 'airMassReq',
+    label: 'Kért levegőtömeg',
+    unit: 'mg/löket',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CA', bytes: '36–37', decode: u16(36) },
+    range: [0, 1200],
+    description:
+      'A motorvezérlő által löketenként kért levegőmennyiség. Gyári zóna 21CA, 36–37. bájt, mg/löket = nyers (FAP Lite, SID807 profil). Korábban 1 bájttal elcsúszva „turbólapát-helyzet” jelöltként olvastuk.',
+    optimal: 'Alapjáraton néhány száz mg/löket, terhelésnél 1000 fölé nő. A mért értékkel együtt kell mozognia.',
+    cars: { '5008': 'Nincs külön megfigyelés.', '508': 'Nincs külön megfigyelés.' },
+  },
+  {
+    id: 'airMassAct',
+    label: 'Mért levegőtömeg',
+    unit: 'mg/löket',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CA', bytes: '38–39', decode: u16(38) },
+    range: [0, 1200],
+    description:
+      'A légtömegmérő szerint löketenként beszívott levegő. Gyári zóna 21CA, 38–39. bájt, mg/löket = nyers (FAP Lite, SID807 profil).',
+    optimal: 'Kövesse a kért értéket. Tartósan a kért alatt: szívóoldali szivárgás vagy hibás légtömegmérő; nyitott EGR-nél kisebb.',
+    cars: { '5008': 'Nincs külön megfigyelés.', '508': 'Nincs külön megfigyelés.' },
+  },
+  {
+    id: 'pedal',
+    label: 'Gázpedál állása',
+    unit: '%',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CC', bytes: '8', decode: u8(8) },
+    range: [0, 100],
+    description: 'A gázpedál lenyomása. Gyári zóna 21CC, 8. bájt, % = nyers (FAP Lite, SID807 profil).',
+    optimal: 'Felengedve 0 %, padlógázon 100 %.',
+    cars: { '5008': 'Nincs külön megfigyelés.', '508': 'Nincs külön megfigyelés.' },
+  },
+  {
+    id: 'brake',
+    label: 'Fékpedál',
+    unit: '',
+    decimals: 0,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CC', bytes: '3', decode: (b) => (b.length > 3 ? ((b[3] & 0x06) === 0x06 ? 1 : 0) : null) },
+    range: [0, 1],
+    format: (v) => (v ? 'lenyomva' : 'felengedve'),
+    description:
+      'A fékpedál kapcsolója. Gyári zóna 21CC, 3. bájt, 0x06 bitek (FAP Lite, SID807 profil). 1 = lenyomva, 0 = felengedve. Ugyanez a bájt a motor állapotbájtja.',
+    optimal: 'Fékezéskor és álló autónál (fékre lépve) 1.',
+    cars: {
+      '5008': 'Az állapotbájt 0xA6 értéke (álló autó) a lenyomott fék.',
+      '508': 'Az állapotbájt 0xA6 értéke (álló autó) a lenyomott fék.',
+    },
+  },
+  {
+    id: 'ecuBattery',
+    label: 'Akkufeszültség (motorvezérlő)',
+    unit: 'V',
+    decimals: 1,
+    status: 'identified',
+    source: { kind: 'zone', zone: 'CC', bytes: '15', decode: (b) => (b.length > 15 ? b[15] / 10 : null) },
+    range: [10, 16],
+    ok: [12.4, 14.8],
+    description:
+      'Az akkumulátor feszültsége a motorvezérlő szerint. Gyári zóna 21CC, 15. bájt, V = nyers / 10 (FAP Lite, SID807 profil). Az adapter (ATRV) mérésével össze lehet vetni.',
+    optimal: 'Járó motorral 13,8–14,8 V, álló motorral 12,4–12,8 V.',
+    cars: {
+      '5008': 'Az adapter szerint menet közben 14,6–14,8 V, start-stop leállásnál 12,0–12,9 V.',
+      '508': 'Az adapter szerint első indítás után kb. 35 mp-ig 10,2 V, utána 14,2 V.',
+    },
+  },
+
   // 🟡 Kérdéses -----------------------------------------------------------------------------
   {
     id: 'soot',
@@ -470,7 +661,7 @@ export const PARAMS: Param[] = [
     status: 'questionable',
     source: { kind: 'zone', zone: 'CB', bytes: '28–29', decode: u16(28) },
     description:
-      'Kilométer-számláló (jelölt). Gyári zóna 21CB, 28–29. bájt, km = nyers. Együtt nő a hosszú számlálóval.',
+      'Kilométer-számláló (jelölt). Gyári zóna 21CB, 28–29. bájt, km = nyers. Együtt nő a FAP-pal megtett km-rel.',
     optimal:
       'Nincs optimális érték. Ha tankolás után nullázódik, „km tankolás óta” (az Eolys adagolás figyeli). Ha regeneráláskor, akkor „km regenerálás óta” (400–500 km-enként várható).',
     cars: {
@@ -480,19 +671,16 @@ export const PARAMS: Param[] = [
     },
   },
   {
-    id: 'longKm',
-    label: 'Hosszú km-számláló (nem a km-óra)',
+    id: 'fapLifeLeft',
+    label: 'FAP hátralévő élettartam (jelölt)',
     unit: 'km',
     decimals: 0,
     status: 'questionable',
-    source: { kind: 'zone', zone: 'CB', bytes: '34–36', decode: u24(34) },
+    source: { kind: 'zone', zone: 'CB', bytes: '12–14', decode: u24(12) },
     description:
-      'Hosszú kilométer-számláló. Gyári zóna 21CB, 34–36. bájt, km = nyers, kb. 8 km-enként frissül. A számláló biztos, de nem a kilométeróra, a jelentése ismeretlen.',
-    optimal: 'Nincs optimális érték. Lehet: km a FAP cseréje, az adalékrendszer nullázása vagy a vezérlő beszerelése óta.',
-    cars: {
-      '5008': 'Km-óra 312 986 km-nél 103 640, tehát kb. 209 350 km-es óraállásnál indult 0-ról (FAP / vezérlő / adalékrendszer csere?).',
-      '508': 'Km-óra kb. 290 000 km-nél 108 400.',
-    },
+      'A FAP Lite app (SID807 profil) szerint a részecskeszűrő hátralévő élettartama. Gyári zóna 21CB, 12–14. bájt, km = nyers. Ellentmondás: a naplóink szerint a 14. bájt mindig a FAP-pal megtett km (b34–36) alsó bájtjának másolata, akkor viszont nem csökkenhet egyenletesen.',
+    optimal: 'Ha tényleg hátralévő km, menet közben csökkennie kell. Egy hosszabb napló a b34–36-tal együtt eldönti.',
+    cars: { '5008': 'Kb. 95 000 km (0x0173xx).', '508': 'Kb. 54 000 km (0x00D4xx).' },
   },
   {
     id: 'eventCounter',
@@ -519,8 +707,8 @@ export const PARAMS: Param[] = [
     range: [0, 255],
     format: hex,
     description:
-      'Üzemállapot bitekben (jelölt). Gyári zóna 21C7, 7. bájt (ugyanez a 21CC b3 és a 21CE b7). 0x10 bit = terhelés, 0x06 = álló autó.',
-    optimal: '0xA6 álló autó, 0xA0 gurulás, 0xB0 terhelés. A 0x20 bit hiánya (pl. 0x80) helyettesítő üzemmódra utalhat.',
+      'Üzemállapot bitekben (jelölt). Gyári zóna 21C7, 7. bájt (ugyanez a 21CC b3 és a 21CE b7). 0x10 bit = terhelés. A 0x06 a FAP Lite szerint a fékpedál (lásd Fékpedál), nem az álló autó.',
+    optimal: '0xA6 álló autó lenyomott fékkel, 0xA0 gurulás, 0xB0 terhelés. A 0x20 bit hiánya (pl. 0x80) helyettesítő üzemmódra utalhat.',
     cars: {
       '5008': 'A 2026-11-01-i helyettesítő üzemmódban a 0x20 bit törlődött (0x80).',
       '508': 'A fenti értékeket mutatja.',
@@ -579,28 +767,6 @@ export const PARAMS: Param[] = [
     cars: { '5008': 'Nincs külön megfigyelés.', '508': 'Alapjáraton 200, terhelésnél 1143.' },
   },
   {
-    id: 'ca3738',
-    label: '21CA bájt 37–38',
-    unit: 'nyers',
-    decimals: 0,
-    status: 'unidentified',
-    source: { kind: 'zone', zone: 'CA', bytes: '37–38', decode: u16(37) },
-    description: 'A töltőnyomással mozog (348–1001). Ötlet: turbólapát (VGT) helyzet vagy kitöltés, /10 = 34,8–100,1 %.',
-    optimal: 'Nem ismert. Gázfröccsös napló dönti el.',
-    cars: { '5008': 'Nincs külön megfigyelés.', '508': '348–1001.' },
-  },
-  {
-    id: 'ca3940',
-    label: '21CA bájt 39–40',
-    unit: 'nyers',
-    decimals: 0,
-    status: 'unidentified',
-    source: { kind: 'zone', zone: 'CA', bytes: '39–40', decode: u16(39) },
-    description: 'A töltőnyomással mozog, a 37–38. bájt párja. Ötlet: turbó vagy EGR szabályozás.',
-    optimal: 'Nem ismert.',
-    cars: { '5008': 'Nincs külön megfigyelés.', '508': 'Nincs külön megfigyelés.' },
-  },
-  {
     id: 'cd10',
     label: '21CD bájt 10',
     unit: 'nyers',
@@ -624,17 +790,6 @@ export const PARAMS: Param[] = [
       '5008': 'A 2026-11-01-i helyettesítő üzemmódban alapjárati értéken állt.',
       '508': 'Nincs külön megfigyelés.',
     },
-  },
-  {
-    id: 'ca2021',
-    label: '21CA bájt 20–21',
-    unit: 'nyers',
-    decimals: 0,
-    status: 'unidentified',
-    source: { kind: 'zone', zone: 'CA', bytes: '20–21', decode: u16(20) },
-    description: 'Normálisan 15–16.',
-    optimal: 'Nem ismert.',
-    cars: { '5008': 'A 2026-11-01-i helyettesítő üzemmódban 0 volt.', '508': 'Nincs külön megfigyelés.' },
   },
   {
     id: 'cb32',
